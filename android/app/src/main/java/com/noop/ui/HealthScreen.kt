@@ -331,9 +331,10 @@ private fun vitalsFor(d: DailyMetric?): List<Vital> = listOf(
         inRange = 40.0..120.0, metricColor = Palette.metricPurple,
     ),
     Vital(
-        key = "skin", label = "Skin Temp", unit = "°C",
-        value = d?.skinTempDevC, format = { String.format("%.1f", it) },
-        inRange = 33.0..36.0, metricColor = Palette.metricAmber,
+        // skinTempDevC is a deviation from the wearer's own baseline, not an absolute reading.
+        key = "skin", label = "Skin Temp Δ", unit = "°C",
+        value = d?.skinTempDevC, format = { String.format("%+.1f", it) },
+        inRange = -0.5..0.5, metricColor = Palette.metricAmber,
     ),
 )
 

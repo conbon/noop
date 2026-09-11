@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Storage
@@ -53,7 +55,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.noop.BuildConfig
 import com.noop.analytics.Zones
+import com.noop.data.AppLog
 import com.noop.data.DataBackup
+import com.noop.data.ImportSummary
+import com.noop.ingest.WhoopCsvImporter
+import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -200,6 +206,46 @@ fun SettingsScreen(vm: AppViewModel) {
                     context, result.message, Toast.LENGTH_LONG,
                 ).show()
             }
+        }
+    }
+
+    // WHOOP export import (the four-CSV zip from app.whoop.com, or a loose CSV).
+    var whoopBusy by remember { mutableStateOf(false) }
+    var whoopResult by remember { mutableStateOf<ImportSummary?>(null) }
+    val whoopLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) { whoopBusy = false; return@rememberLauncherForActivityResult }
+        scope.launch {
+            val summary = withContext(Dispatchers.IO) {
+                runCatching { WhoopCsvImporter.importZip(context, uri, vm.repo) }.getOrElse {
+                    AppLog.e("Import", "WHOOP import threw", it)
+                    ImportSummary.failure("WHOOP", it.message ?: "Import failed")
+                }
+            }
+            AppLog.i("Import", "WHOOP: ${summary.message} counts=${summary.counts}")
+            whoopBusy = false
+            whoopResult = summary
+            Toast.makeText(context, summary.message, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // Diagnostic log export — plain text the user can share.
+    var logBusy by remember { mutableStateOf(false) }
+    var logLines by remember { mutableStateOf(AppLog.lineCount()) }
+    val logLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        if (uri == null) { logBusy = false; return@rememberLauncherForActivityResult }
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { AppLog.writeTo(context, uri) } }
+            logBusy = false
+            logLines = AppLog.lineCount()
+            Toast.makeText(
+                context,
+                result.fold({ "Log exported." }, { "Log export failed: ${it.message}" }),
+                Toast.LENGTH_LONG,
+            ).show()
         }
     }
 
@@ -377,6 +423,116 @@ fun SettingsScreen(vm: AppViewModel) {
                     icon = Icons.Filled.Info,
                     iconTint = Palette.textTertiary,
                     text = "Importing overwrites everything currently on this phone. Your old data is kept in a side file just in case. NOOP needs a relaunch for an import to take effect.",
+                )
+            }
+        }
+
+        // --- WHOOP export import ---
+        SettingsSection(
+            icon = Icons.Filled.FileUpload,
+            title = "Import WHOOP data",
+            blurb = "Bring your WHOOP history in. On app.whoop.com go to Data Management → Export, " +
+                "then pick the .zip here (a single CSV from it works too). Days are filed under the " +
+                "morning you woke, exactly as WHOOP shows them, and re-importing simply updates.",
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Button(
+                        onClick = {
+                            whoopBusy = true
+                            whoopLauncher.launch(arrayOf("*/*"))
+                        },
+                        enabled = !whoopBusy,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Palette.accent,
+                            contentColor = Palette.surfaceBase,
+                        ),
+                    ) { Text("Import WHOOP export…", style = NoopType.captionNumber) }
+
+                    if (whoopBusy) {
+                        CircularProgressIndicator(
+                            color = Palette.accent,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+
+                whoopResult?.let { r ->
+                    val ok = r.totalRows > 0
+                    StatePill(
+                        title = if (ok) "Imported ${r.totalRows} rows" else "Import failed",
+                        tone = if (ok) StrandTone.Positive else StrandTone.Critical,
+                        showsDot = true,
+                    )
+                    if (ok) {
+                        Text(
+                            r.counts.entries.joinToString(" · ") { "${it.value} ${it.key}" } +
+                                (r.firstDay?.let { f -> "  ·  $f → ${r.lastDay}" } ?: ""),
+                            style = NoopType.footnote,
+                            color = Palette.textSecondary,
+                        )
+                    }
+                }
+
+                NoteRow(
+                    icon = Icons.Filled.Info,
+                    iconTint = Palette.textTertiary,
+                    text = "Recovery, strain, sleep stages, vitals, workouts and journal answers are all " +
+                        "kept. Skin temperature is stored as a deviation from your own rolling baseline.",
+                )
+            }
+        }
+
+        // --- Diagnostics ---
+        SettingsSection(
+            icon = Icons.Filled.BugReport,
+            title = "Diagnostics",
+            blurb = "NOOP keeps a short on-device log of strap pairing, offloads, imports and scoring. " +
+                "Export it as a text file to share when something misbehaves — it contains no " +
+                "biometric data, only what the app was doing and when.",
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Button(
+                        onClick = {
+                            logBusy = true
+                            logLauncher.launch("noop-log-${LocalDate.now()}.txt")
+                        },
+                        enabled = !logBusy,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Palette.accent,
+                            contentColor = Palette.surfaceBase,
+                        ),
+                    ) { Text("Export log…", style = NoopType.captionNumber) }
+
+                    OutlinedButton(
+                        onClick = {
+                            AppLog.clear()
+                            logLines = AppLog.lineCount()
+                        },
+                        enabled = !logBusy,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Palette.accent),
+                    ) { Text("Clear", style = NoopType.captionNumber) }
+
+                    if (logBusy) {
+                        CircularProgressIndicator(
+                            color = Palette.accent,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+                Text(
+                    "$logLines lines on device · includes this process's logcat at export time",
+                    style = NoopType.footnote,
+                    color = Palette.textTertiary,
                 )
             }
         }

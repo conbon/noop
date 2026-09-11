@@ -19,7 +19,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
-import android.util.Log
 import com.noop.data.HrRow
 import com.noop.data.RrRow
 import com.noop.data.StreamBatch
@@ -1141,6 +1140,6 @@ class WhoopBleClient(
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
     private fun log(s: String) {
-        Log.d(TAG, s)
+        com.noop.data.AppLog.d(TAG, s)
     }
 }
