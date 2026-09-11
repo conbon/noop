@@ -158,25 +158,30 @@ fun ConnectionDot(
     size: Dp = 9.dp,
     modifier: Modifier = Modifier,
 ) {
-    val transition = rememberInfiniteTransition(label = "dot")
-    val scale by transition.animateFloat(
-        initialValue = 1.0f,
-        targetValue = if (pulsing) 2.4f else 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(Motion.breathPeriodMs, easing = Motion.easeInOut),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "dotScale",
-    )
-    val haloAlpha by transition.animateFloat(
-        initialValue = 0.5f,
-        targetValue = if (pulsing) 0.0f else 0.5f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(Motion.breathPeriodMs, easing = Motion.easeInOut),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "dotHalo",
-    )
+    val animate = pulsing && Motion.animationsEnabled
+    var scale = 1.7f
+    var haloAlpha = 0.25f
+    if (animate) {
+        val transition = rememberInfiniteTransition(label = "dot")
+        scale = transition.animateFloat(
+            initialValue = 1.0f,
+            targetValue = 2.4f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(Motion.breathPeriodMs, easing = Motion.easeInOut),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "dotScale",
+        ).value
+        haloAlpha = transition.animateFloat(
+            initialValue = 0.5f,
+            targetValue = 0.0f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(Motion.breathPeriodMs, easing = Motion.easeInOut),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "dotHalo",
+        ).value
+    }
     Box(
         modifier = modifier.size(size),
         contentAlignment = Alignment.Center,
@@ -367,11 +372,14 @@ fun GaugeRing(
     lineWidth: Dp = 16.dp,
     content: @Composable () -> Unit = {},
 ) {
-    val animatedFraction by animateFloatAsState(
-        targetValue = fraction.coerceIn(0f, 1f),
-        animationSpec = tween(Motion.durationSlow, easing = Motion.drawIn),
-        label = "ringFill",
-    )
+    val target = fraction.coerceIn(0f, 1f)
+    val animatedFraction = if (Motion.animationsEnabled) {
+        animateFloatAsState(
+            targetValue = target,
+            animationSpec = tween(Motion.durationSlow, easing = Motion.drawIn),
+            label = "ringFill",
+        ).value
+    } else target
     Box(
         modifier = modifier.size(diameter),
         contentAlignment = Alignment.Center,

@@ -193,6 +193,13 @@ object Palette {
 // MARK: - Motion — physiological: breathe / pulse / flow, no cartoon bounce.
 
 object Motion {
+    /**
+     * Master switch for motion. Screenshot tests turn it off: an infinite "breathing"
+     * transition never lets the Compose runtime go idle, so every capture after it
+     * would wait out the idle timeout, and draw-in animations would capture mid-flight.
+     */
+    @Volatile var animationsEnabled: Boolean = true
+
     // Durations (ms)
     const val durationFast = 180       // hover/press feedback
     const val durationStandard = 300   // card appear, fades
