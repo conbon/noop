@@ -64,6 +64,7 @@ class ScreenScreenshotTest {
     @Test
     fun sleep() {
         val sessions = fixtureSessions(days)
+        System.err.println("TIMING sleep: before capture ${System.currentTimeMillis()}")
         captureRoboImage("build/outputs/roborazzi/sleep.png") {
             NoopTheme {
                 SleepContent(
@@ -74,12 +75,14 @@ class ScreenScreenshotTest {
                 )
             }
         }
+        System.err.println("TIMING sleep: after capture ${System.currentTimeMillis()}")
     }
 
     /** The whole Sleep page with a strap-scored latest night (timed stages + HR trace). */
     @Test
     fun sleepFullPage() {
         val sessions = fixtureSessions(days)
+        System.err.println("TIMING sleepFullPage: before capture ${System.currentTimeMillis()}")
         captureRoboImage("build/outputs/roborazzi/sleep_full.png") {
             NoopTheme {
                 SleepContent(
@@ -88,6 +91,7 @@ class ScreenScreenshotTest {
                 )
             }
         }
+        System.err.println("TIMING sleepFullPage: after capture ${System.currentTimeMillis()}")
     }
 
     /** Totals-only night (the WHOOP-import shape) — exercises the durations fallback. */
