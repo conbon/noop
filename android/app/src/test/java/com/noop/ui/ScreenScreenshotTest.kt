@@ -25,9 +25,16 @@ import kotlin.math.cos
  * Robolectric native graphics rasterizes real pixels; PNGs land in
  * app/build/outputs/roborazzi/.
  */
+/**
+ * Full-page captures use a very tall viewport so nothing scrolls and every card renders.
+ * (Robolectric also spends ~50 s per test waiting for a scrolling page to settle; the
+ * tall viewport sidesteps that.) Only [shell] uses real phone dimensions.
+ */
+private const val TALL_PAGE = "w411dp-h3200dp-420dpi"
+
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [34], qualifiers = RobolectricDeviceQualifiers.Pixel7)
+@Config(sdk = [34], qualifiers = TALL_PAGE)
 class ScreenScreenshotTest {
 
     private val days: List<DailyMetric> = fixtureDays()
@@ -69,9 +76,8 @@ class ScreenScreenshotTest {
         }
     }
 
-    /** The whole Sleep page on a very tall viewport, so the weekly cards below the fold render too. */
+    /** The whole Sleep page with a strap-scored latest night (timed stages + HR trace). */
     @Test
-    @Config(sdk = [34], qualifiers = "w411dp-h3200dp-420dpi")
     fun sleepFullPage() {
         val sessions = fixtureSessions(days)
         captureRoboImage("build/outputs/roborazzi/sleep_full.png") {
@@ -118,7 +124,9 @@ class ScreenScreenshotTest {
         }
     }
 
+    /** Phone-sized frame: Today behind the floating bottom nav, as a user sees it. */
     @Test
+    @Config(sdk = [34], qualifiers = RobolectricDeviceQualifiers.Pixel7)
     fun shell() {
         captureRoboImage("build/outputs/roborazzi/shell.png") {
             NoopTheme {
