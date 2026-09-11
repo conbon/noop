@@ -174,31 +174,31 @@ private fun RingWithLabel(
 // MARK: - Health Monitor card
 
 /** One vital line: label, formatted value, and whether it sits inside its baseline band. */
-private data class Vital(val ok: Boolean)
+private data class VitalCheck(val ok: Boolean)
 
 /**
  * Baseline check per vital: value vs the mean of up to the prior 30 days (excluding
  * today), with a per-metric tolerance. SpO2 and skin temp use absolute bands.
  */
-private fun vitals(today: DailyMetric?, days: List<DailyMetric>): List<Vital> {
+private fun vitals(today: DailyMetric?, days: List<DailyMetric>): List<VitalCheck> {
     if (today == null) return emptyList()
     val prior = days.dropLast(1).takeLast(30)
     fun baseline(pick: (DailyMetric) -> Double?): Double? {
         val xs = prior.mapNotNull(pick)
         return if (xs.size >= 3) xs.average() else null
     }
-    fun within(value: Double?, base: Double?, tolFrac: Double): Vital? {
+    fun within(value: Double?, base: Double?, tolFrac: Double): VitalCheck? {
         if (value == null) return null
-        if (base == null) return Vital(ok = true) // no baseline yet — don't alarm
-        return Vital(ok = abs(value - base) <= base * tolFrac)
+        if (base == null) return VitalCheck(ok = true) // no baseline yet — don't alarm
+        return VitalCheck(ok = abs(value - base) <= base * tolFrac)
     }
 
     return listOfNotNull(
         within(today.avgHrv, baseline { it.avgHrv }, 0.25),
         within(today.restingHr?.toDouble(), baseline { it.restingHr?.toDouble() }, 0.08),
-        today.spo2Pct?.let { Vital(ok = it >= 94.0) },
+        today.spo2Pct?.let { VitalCheck(ok = it >= 94.0) },
         within(today.respRateBpm, baseline { it.respRateBpm }, 0.10),
-        today.skinTempDevC?.let { Vital(ok = abs(it) <= 0.6) },
+        today.skinTempDevC?.let { VitalCheck(ok = abs(it) <= 0.6) },
     )
 }
 
