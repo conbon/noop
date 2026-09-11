@@ -61,8 +61,12 @@ fun TrendsScreen(vm: AppViewModel) {
         // Merged: imported WHOOP days win; on-device computed days gap-fill the trends.
         fullHistory = vm.repo.daysMerged("my-whoop")
     }
-    val days = fullHistory ?: reactiveDays
+    TrendsContent(days = fullHistory ?: reactiveDays)
+}
 
+/** Stateless body — screenshot tests drive this directly with synthetic data. */
+@Composable
+internal fun TrendsContent(days: List<DailyMetric>) {
     var range by remember { mutableStateOf(TrendsRange.Quarter) }
 
     ScreenScaffold(title = "Trends", subtitle = "The thread of you over time.") {

@@ -83,7 +83,7 @@ import kotlinx.coroutines.launch
 // belong to later waves point at a ComingSoon placeholder so the app compiles today.
 
 /** A single drawer destination: stable route, display title, sidebar icon. */
-private enum class Destination(
+internal enum class Destination(
     val route: String,
     val title: String,
     val icon: ImageVector,
@@ -320,7 +320,7 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
 // item reads in primary white; the rest in secondary grey. Everything else in
 // the app stays reachable through the drawer.
 
-private val bottomBarItems = listOf(
+internal val bottomBarItems = listOf(
     Destination.Today,
     Destination.Sleep,
     Destination.Trends,
@@ -328,7 +328,7 @@ private val bottomBarItems = listOf(
 )
 
 @Composable
-private fun NoopBottomBar(
+internal fun NoopBottomBar(
     current: Destination,
     onNavigate: (Destination) -> Unit,
     onMore: () -> Unit,

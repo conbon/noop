@@ -42,7 +42,12 @@ private const val HR_MAX_DEFAULT = 190
 fun HealthScreen(vm: AppViewModel) {
     val live by vm.live.collectAsStateWithLifecycle()
     val today by vm.today.collectAsStateWithLifecycle()
+    HealthContent(live = live, today = today)
+}
 
+/** Stateless body — screenshot tests drive this directly with synthetic data. */
+@Composable
+internal fun HealthContent(live: LiveState, today: DailyMetric?) {
     val displayHr = displayHr(live)
     val hasLiveHr = displayHr != null
 

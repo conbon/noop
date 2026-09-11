@@ -1,8 +1,14 @@
 package com.noop.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.github.takahirom.roborazzi.captureRoboImage
+import com.noop.ble.LiveState
 import com.noop.data.DailyMetric
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,6 +47,56 @@ class ScreenScreenshotTest {
         captureRoboImage("build/outputs/roborazzi/today_empty.png") {
             NoopTheme {
                 TodayContent(today = null, alert = null, days = emptyList())
+            }
+        }
+    }
+
+    @Test
+    fun sleep() {
+        captureRoboImage("build/outputs/roborazzi/sleep.png") {
+            NoopTheme { SleepContent(days = days, session = null) }
+        }
+    }
+
+    @Test
+    fun trends() {
+        captureRoboImage("build/outputs/roborazzi/trends.png") {
+            NoopTheme { TrendsContent(days = fixtureDays(120)) }
+        }
+    }
+
+    @Test
+    fun health() {
+        captureRoboImage("build/outputs/roborazzi/health.png") {
+            NoopTheme {
+                HealthContent(
+                    live = LiveState(
+                        connected = true,
+                        bonded = true,
+                        heartRate = 64,
+                        rr = listOf(920, 950, 910, 980, 940, 900, 960, 930, 970, 915),
+                        batteryPct = 76.0,
+                    ),
+                    today = days.last(),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun shell() {
+        captureRoboImage("build/outputs/roborazzi/shell.png") {
+            NoopTheme {
+                Column(Modifier.fillMaxSize().background(Palette.surfaceBase)) {
+                    Box(Modifier.weight(1f)) {
+                        TodayContent(today = days.last(), alert = null, days = days)
+                    }
+                    NoopBottomBar(
+                        current = Destination.Today,
+                        onNavigate = {},
+                        onMore = {},
+                    )
+                }
             }
         }
     }

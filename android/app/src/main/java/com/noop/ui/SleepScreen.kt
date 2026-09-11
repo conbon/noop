@@ -84,6 +84,12 @@ fun SleepScreen(vm: AppViewModel) {
         }.getOrNull()
     }
 
+    SleepContent(days = days, session = session)
+}
+
+/** Stateless body — screenshot tests drive this directly with synthetic data. */
+@Composable
+internal fun SleepContent(days: List<DailyMetric>, session: SleepSession?) {
     val model = remember(days, session) { buildSleepModel(days, session) }
 
     ScreenScaffold(title = "Sleep", subtitle = "Last night, read in two seconds.") {
