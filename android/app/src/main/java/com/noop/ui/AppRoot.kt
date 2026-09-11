@@ -260,7 +260,7 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Palette.surfaceBase,
+                        containerColor = Palette.surfaceBaseTop,
                         titleContentColor = Palette.textPrimary,
                         navigationIconContentColor = Palette.textPrimary,
                     ),

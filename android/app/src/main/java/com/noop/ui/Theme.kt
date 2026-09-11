@@ -29,47 +29,49 @@ import androidx.compose.ui.unit.sp
 
 object Palette {
 
-    // Surfaces — cool charcoal, no green cast. Cards sit ~1 step lighter than base.
-    val surfaceBase = Color(0xFF101418)    // app background
-    val surfaceRaised = Color(0xFF1B2126)  // cards
-    val surfaceOverlay = Color(0xFF252C32) // sheets / popovers / nav bar
-    val surfaceInset = Color(0xFF0C0F12)   // wells / chart insets
-    val hairline = Color(0xFF262E34)       // subtle 1px separators
-    val hairlineStrong = Color(0xFF37424A) // emphasis separators
+    // Surfaces — measured from the reference: a cool graphite that lifts slightly toward
+    // the top of the screen. Cards sit one step lighter than the base.
+    val surfaceBase = Color(0xFF151A1E)    // app background
+    val surfaceBaseTop = Color(0xFF1F262C) // the lighter head of the background gradient
+    val surfaceRaised = Color(0xFF23282D)  // cards
+    val surfaceOverlay = Color(0xFF2C3136) // sheets / popovers / nav bar
+    val surfaceInset = Color(0xFF1A1F23)   // wells / chart insets
+    val hairline = Color(0xFF2B3136)       // subtle 1px separators
+    val hairlineStrong = Color(0xFF3B4248) // emphasis separators
 
-    // Text
-    val textPrimary = Color(0xFFF3F6F8)
-    val textSecondary = Color(0xFF9AA5AC)
-    val textTertiary = Color(0xFF6E787F)
+    // Text — pure white numerals, a light grey for supporting values.
+    val textPrimary = Color(0xFFFFFFFF)
+    val textSecondary = Color(0xFFB9BDC2)
+    val textTertiary = Color(0xFF858688)
 
     // Ambient glow behind hero readouts.
-    val glowAmbient = Color(0xFF16202B)
+    val glowAmbient = Color(0xFF1C2230)
 
-    // Accent — chrome, not data.
-    val accent = Color(0xFF31A8F0)       // console cyan
-    val accentHover = Color(0xFF5BBCF5)
-    val accentMuted = Color(0xFF11242F)  // selected-row tint
-    val focusRing = Color(0xFF31A8F0)
+    // Accent — chrome, not data. The same blue the strain family owns.
+    val accent = Color(0xFF0093E9)
+    val accentHover = Color(0xFF3FAFF2)
+    val accentMuted = Color(0xFF16303F)  // selected-row tint
+    val focusRing = Color(0xFF0093E9)
     const val disabledOpacity = 0.45f
 
-    // Ring track — the unfilled remainder of every gauge.
-    val ringTrack = Color(0x17FFFFFF)
+    // Ring track — the unfilled remainder of every gauge (opaque, reads on base and cards).
+    val ringTrack = Color(0xFF2F373A)
 
     // Metric identities.
-    val sleepBlue = Color(0xFF87AECB)   // slate blue — everything sleep
-    val strainBlue = Color(0xFF35ACF7)  // electric blue — everything strain
+    val sleepBlue = Color(0xFF7AA2BB)   // slate blue — everything sleep
+    val strainBlue = Color(0xFF0093E9)  // electric blue — everything strain
 
     // Recovery — traffic-light tiers (discrete, like the score chip).
-    val recoveryLow = Color(0xFFFF4E5E)   // 0–33
-    val recoveryMedium = Color(0xFFF8D247) // 34–66
-    val recoveryHigh = Color(0xFF34D06B)  // 67–100
+    val recoveryLow = Color(0xFFF5052A)   // 0–33
+    val recoveryMedium = Color(0xFFFFDE00) // 34–66
+    val recoveryHigh = Color(0xFF1EEA0D)  // 67–100
 
     // Recovery gradient stops (for chart fills; the score itself uses tiers).
-    val recovery000 = Color(0xFFFF4E5E)
-    val recovery030 = Color(0xFFFF8A45)
-    val recovery055 = Color(0xFFF8D247)
-    val recovery078 = Color(0xFF57C96E)
-    val recovery100 = Color(0xFF34D06B)
+    val recovery000 = Color(0xFFF5052A)
+    val recovery030 = Color(0xFFFF8A1A)
+    val recovery055 = Color(0xFFFFDE00)
+    val recovery078 = Color(0xFF8EE800)
+    val recovery100 = Color(0xFF1EEA0D)
 
     /** Ordered gradient stops (position 0..1 → color) for the recovery scale. */
     val recoveryStops: List<Pair<Float, Color>> = listOf(
@@ -81,10 +83,10 @@ object Palette {
     )
 
     // Strain ramp — deep to bright electric blue.
-    val strain000 = Color(0xFF1F6FB8)
-    val strain033 = Color(0xFF2492E3)
-    val strain066 = Color(0xFF35ACF7)
-    val strain100 = Color(0xFF6FC8FF)
+    val strain000 = Color(0xFF1D6FB5)
+    val strain033 = Color(0xFF0093E9)
+    val strain066 = Color(0xFF0093E9)
+    val strain100 = Color(0xFF4FB6F5)
 
     val strainStops: List<Pair<Float, Color>> = listOf(
         0.00f to strain000,
@@ -94,31 +96,31 @@ object Palette {
     )
 
     // Sleep stages.
-    val sleepAwake = Color(0xFFCBD3D9) // pale grey
-    val sleepLight = Color(0xFF8F9FE9) // periwinkle
-    val sleepDeep = Color(0xFFF07CE0)  // pink (SWS)
-    val sleepREM = Color(0xFF9D62F0)   // violet
+    val sleepAwake = Color(0xFFC9C9CB) // pale grey
+    val sleepLight = Color(0xFFA4A3F3) // periwinkle
+    val sleepDeep = Color(0xFFFB97FA)  // pink (SWS)
+    val sleepREM = Color(0xFFAC5AED)   // violet
 
-    // HR zones 1..5 — cool → hot.
-    val zone1 = Color(0xFF4AA7D6)
-    val zone2 = Color(0xFF34D06B)
-    val zone3 = Color(0xFFF8D247)
-    val zone4 = Color(0xFFFF9838)
-    val zone5 = Color(0xFFFF4E5E)
+    // HR zones 1..5 — cool → hot (the stress low/medium/high family, then warning/critical).
+    val zone1 = Color(0xFF67ADE8)
+    val zone2 = Color(0xFF00F2A0)
+    val zone3 = Color(0xFFFFDE00)
+    val zone4 = Color(0xFFFFA721)
+    val zone5 = Color(0xFFF5052A)
 
     /** HR zones indexed 1..5; index 0 mirrors zone1 for convenience. */
     val hrZones: List<Color> = listOf(zone1, zone1, zone2, zone3, zone4, zone5)
 
-    // Status — never reused as recovery colors.
-    val statusPositive = Color(0xFF34D06B)
-    val statusWarning = Color(0xFFFFB238)
-    val statusCritical = Color(0xFFFF4E5E)
+    // Status — teal-green "within range", orange caution, red critical.
+    val statusPositive = Color(0xFF00F2A0)
+    val statusWarning = Color(0xFFFFA721)
+    val statusCritical = Color(0xFFF5052A)
 
     // Per-metric accents for secondary dashboards.
-    val metricCyan = Color(0xFF3EC5F0)
-    val metricPurple = Color(0xFF9D7DF2)
-    val metricAmber = Color(0xFFFFB238)
-    val metricRose = Color(0xFFFF5E7A)
+    val metricCyan = Color(0xFF67ADE8)
+    val metricPurple = Color(0xFFAC5AED)
+    val metricAmber = Color(0xFFFFA721)
+    val metricRose = Color(0xFFF5556A)
 
     // MARK: - Sampling helpers
 
@@ -182,6 +184,10 @@ object Palette {
     /** The strain ramp as a horizontal sweep brush. */
     fun strainBrush(): Brush =
         Brush.horizontalGradient(*strainStops.toTypedArray())
+
+    /** Screen background: a gentle lift at the top settling into the base by ~600px. */
+    fun screenBackground(): Brush =
+        Brush.verticalGradient(0f to surfaceBaseTop, 1f to surfaceBase, endY = 1400f)
 }
 
 // MARK: - Motion — physiological: breathe / pulse / flow, no cartoon bounce.

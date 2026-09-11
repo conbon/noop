@@ -532,7 +532,7 @@ fun ScreenScaffold(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(Palette.surfaceBase)
+            .background(Palette.screenBackground())
             .verticalScroll(rememberScrollState())
             .padding(Metrics.screenPadding),
         verticalArrangement = Arrangement.spacedBy(20.dp),
