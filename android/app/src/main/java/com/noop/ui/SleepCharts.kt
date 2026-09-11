@@ -26,6 +26,7 @@ import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
+// (rememberTextMeasurer is used by the week charts below)
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -75,21 +76,24 @@ internal fun NightChart(
     modifier: Modifier = Modifier,
 ) {
     val ticks = listOf(130, 110, 90, 70, 50, 30)
-    val measurer = rememberTextMeasurer()
     val color = sleepStageColor(selectedStage)
+    // With neither a trace nor timed stages there is nothing to plot: keep just the
+    // bounds in a short strip rather than an empty 230dp box.
+    val compact = hr.size < 2 && spans == null
+    val chartHeight = if (compact) 72.dp else 230.dp
 
     Column(modifier = modifier) {
-        Row(modifier = Modifier.fillMaxWidth().height(230.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().height(chartHeight)) {
             // Y-axis tick labels.
             Column(
-                modifier = Modifier.fillMaxWidth(0.11f).height(230.dp),
+                modifier = Modifier.fillMaxWidth(0.11f).height(chartHeight),
                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
             ) {
-                ticks.forEach { t ->
+                if (!compact) ticks.forEach { t ->
                     Text("$t", style = NoopType.captionNumber, color = Palette.textTertiary)
                 }
             }
-            Canvas(modifier = Modifier.weight(1f).height(230.dp)) {
+            Canvas(modifier = Modifier.weight(1f).height(chartHeight)) {
                 val span = (wake - onset).coerceAtLeast(60L).toDouble()
                 val pad = span * 0.06 // HR keeps running a little past both bounds
                 val x0 = onset - pad
@@ -97,16 +101,20 @@ internal fun NightChart(
                 fun xOf(ts: Long) = (((ts - x0) / (x1 - x0)) * size.width).toFloat()
                 fun yOf(bpm: Double) = ((130.0 - bpm.coerceIn(30.0, 130.0)) / 100.0 * size.height).toFloat()
 
-                // Selected-stage columns (drawn first so the trace sits on top).
+                // Selected-stage columns hang from the trace (its highest point inside the
+                // span) and fade toward the baseline, so they sit under the line, not over it.
                 spans?.filter { it.stage == selectedStage }?.forEach { s ->
                     val l = xOf(s.start); val r = xOf(s.end)
+                    val inSpan = hr.filter { it.ts in s.start..s.end }
+                    val top = if (inSpan.isNotEmpty()) yOf(inSpan.maxOf { it.bpm }.toDouble()) - 6f
+                    else size.height * 0.45f
                     drawRect(
                         brush = Brush.verticalGradient(
-                            listOf(color.copy(alpha = 0.34f), color.copy(alpha = 0.06f)),
-                            startY = 0f, endY = size.height,
+                            listOf(color.copy(alpha = 0.30f), color.copy(alpha = 0.0f)),
+                            startY = top, endY = size.height,
                         ),
-                        topLeft = Offset(l, 0f),
-                        size = Size((r - l).coerceAtLeast(2f), size.height),
+                        topLeft = Offset(l, top.coerceAtLeast(0f)),
+                        size = Size((r - l).coerceAtLeast(2f), (size.height - top).coerceAtLeast(0f)),
                     )
                 }
 
@@ -130,12 +138,6 @@ internal fun NightChart(
                             )
                         }
                     }
-                } else if (spans == null) {
-                    // Nothing timed to show — a quiet baseline keeps the card's shape.
-                    drawLine(
-                        Palette.hairline, Offset(0f, size.height / 2f), Offset(size.width, size.height / 2f),
-                        strokeWidth = 1f, pathEffect = DASH,
-                    )
                 }
 
                 // Onset / wake bounds.
@@ -153,6 +155,13 @@ internal fun NightChart(
         Row(modifier = Modifier.fillMaxWidth().padding(start = 40.dp, top = 6.dp)) {
             Text(clock(onset), style = NoopType.captionNumber, color = Palette.textPrimary, modifier = Modifier.weight(1f))
             Text(clock(wake), style = NoopType.captionNumber, color = Palette.textPrimary, textAlign = TextAlign.End)
+        }
+        if (compact) {
+            Text(
+                "No heart-rate trace for this night — nights recorded from the strap draw one here.",
+                style = NoopType.footnote, color = Palette.textTertiary,
+                modifier = Modifier.padding(start = 40.dp, top = 8.dp),
+            )
         }
     }
 }

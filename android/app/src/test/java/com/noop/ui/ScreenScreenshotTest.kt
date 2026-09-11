@@ -69,6 +69,21 @@ class ScreenScreenshotTest {
         }
     }
 
+    /** The whole Sleep page on a very tall viewport, so the weekly cards below the fold render too. */
+    @Test
+    @Config(sdk = [34], qualifiers = "w411dp-h3200dp-420dpi")
+    fun sleepFullPage() {
+        val sessions = fixtureSessions(days)
+        captureRoboImage("build/outputs/roborazzi/sleep_full.png") {
+            NoopTheme {
+                SleepContent(
+                    days = days, sessions = sessions, hr = fixtureHr(sessions.last()),
+                    series = mapOf("sleepNeedMin" to days.associate { it.day to 470.0 + 20 * cos(it.day.hashCode() % 7 / 2.0) }),
+                )
+            }
+        }
+    }
+
     /** Totals-only night (the WHOOP-import shape) — exercises the durations fallback. */
     @Test
     fun sleepImportedNight() {
