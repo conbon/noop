@@ -38,21 +38,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlin.math.cos
 import kotlin.math.min
-import kotlin.math.sin
 
 // MARK: - Locked component system (ported from StrandDesign/Components.swift + StrandCard.swift)
 //
@@ -73,7 +71,6 @@ fun NoopCard(
             .fillMaxWidth()
             .clip(shape)
             .background(Palette.surfaceRaised)
-            .border(1.dp, Palette.hairline, shape)
             .padding(padding),
     ) {
         content()
@@ -337,13 +334,13 @@ fun <T> SegmentedPillControl(
         items.forEach { item ->
             val selected = item == selection
             val bg by animateColorAsState(
-                if (selected) Palette.accent else Color.Transparent,
+                if (selected) Palette.surfaceOverlay else Color.Transparent,
                 tween(Motion.durationFast), label = "segBg",
             )
             Text(
-                text = label(item),
-                style = NoopType.captionNumber,
-                color = if (selected) Palette.surfaceBase else Palette.textSecondary,
+                text = label(item).uppercase(),
+                style = NoopType.overline.copy(letterSpacing = 0.8.sp),
+                color = if (selected) Palette.textPrimary else Palette.textSecondary,
                 modifier = Modifier
                     .clip(RoundedCornerShape(50))
                     .background(bg)
@@ -354,13 +351,117 @@ fun <T> SegmentedPillControl(
     }
 }
 
-// MARK: - RecoveryRing (ported from StrandDesign/RecoveryRing.swift §9.3) — THE signature component
+// MARK: - GaugeRing — THE signature component
 //
-// A 240° open gauge arc (gap at bottom), thick rounded-cap stroke filled with a
-// sweep gradient sampling the recovery gradient, filled to score/100 over a faint
-// track. Soft outer bloom scaled by score, a luminous leading bead at the tip, a
-// draw-in animation when the value changes. Center shows the big number, a state
-// word tinted to the sampled color, and an optional supporting line.
+// A full-circle gauge: thick rounded-cap stroke in ONE solid metric color,
+// filled clockwise from 12 o'clock to `fraction` over a faint white track,
+// with a draw-in animation. Center holds arbitrary content (usually a heavy
+// numeral + a small unit).
+
+@Composable
+fun GaugeRing(
+    fraction: Float,
+    color: Color,
+    modifier: Modifier = Modifier,
+    diameter: Dp = 240.dp,
+    lineWidth: Dp = 16.dp,
+    content: @Composable () -> Unit = {},
+) {
+    val animatedFraction by animateFloatAsState(
+        targetValue = fraction.coerceIn(0f, 1f),
+        animationSpec = tween(Motion.durationSlow, easing = Motion.drawIn),
+        label = "ringFill",
+    )
+    Box(
+        modifier = modifier.size(diameter),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(diameter)
+                .drawBehind {
+                    val stroke = lineWidth.toPx()
+                    val radius = (min(size.width, size.height) - stroke) / 2f
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    val topLeft = Offset(center.x - radius, center.y - radius)
+                    val arcSize = Size(radius * 2f, radius * 2f)
+                    val ringStroke = Stroke(width = stroke, cap = StrokeCap.Round)
+
+                    // Full-circle faint track.
+                    drawArc(
+                        color = Palette.ringTrack,
+                        startAngle = 0f,
+                        sweepAngle = 360f,
+                        useCenter = false,
+                        topLeft = topLeft,
+                        size = arcSize,
+                        style = ringStroke,
+                    )
+
+                    // Solid-color fill, clockwise from 12 o'clock.
+                    if (animatedFraction > 0.004f) {
+                        drawArc(
+                            color = color,
+                            startAngle = -90f,
+                            sweepAngle = 360f * animatedFraction,
+                            useCenter = false,
+                            topLeft = topLeft,
+                            size = arcSize,
+                            style = ringStroke,
+                        )
+                    }
+                },
+        )
+        content()
+    }
+}
+
+// MARK: - MetricRing — a labeled gauge with the standard center readout
+//
+// The trio-row unit: GaugeRing with a heavy number + small trailing unit in the
+// center. `value` is pre-formatted by the caller ("74", "4.3"); `unit` renders
+// small and top-aligned next to it ("%").
+
+@Composable
+fun MetricRing(
+    value: String,
+    fraction: Float,
+    color: Color,
+    modifier: Modifier = Modifier,
+    unit: String? = null,
+    diameter: Dp = 104.dp,
+    lineWidth: Dp = 9.dp,
+) {
+    GaugeRing(
+        fraction = fraction,
+        color = color,
+        diameter = diameter,
+        lineWidth = lineWidth,
+        modifier = modifier,
+    ) {
+        Row(verticalAlignment = Alignment.Top) {
+            Text(
+                text = value,
+                style = NoopType.number(diameter.value * 0.27f),
+                color = Palette.textPrimary,
+                maxLines = 1,
+            )
+            if (unit != null) {
+                Text(
+                    text = unit,
+                    style = NoopType.number(diameter.value * 0.13f, FontWeight.Bold),
+                    color = Palette.textPrimary,
+                    modifier = Modifier.padding(top = diameter.value.dp * 0.045f),
+                )
+            }
+        }
+    }
+}
+
+// MARK: - RecoveryRing — the recovery-specific gauge (kept API for all call sites)
+//
+// Full-circle GaugeRing tinted by the discrete recovery tier, with the score
+// numeral, the tier word tinted to match, and an optional supporting line.
 
 @Composable
 fun RecoveryRing(
@@ -371,120 +472,36 @@ fun RecoveryRing(
     lineWidth: Dp = 16.dp,
     showsLabel: Boolean = true,
 ) {
-    val fraction = (score / 100.0).toFloat().coerceIn(0f, 1f)
-    val tipColor = Palette.recoveryColor(score)
+    val tierColor = Palette.recoveryColor(score)
     val stateWord = Palette.recoveryState(score)
 
-    val startDeg = 150f          // lower-left
-    val spanDeg = 240f           // 240° open gauge, gap centered at bottom
-
-    val animatedFraction by animateFloatAsState(
-        targetValue = fraction,
-        animationSpec = tween(Motion.durationSlow, easing = Motion.drawIn),
-        label = "ringFill",
-    )
-    val breathe = rememberInfiniteTransition(label = "bloom")
-    val bloomPulse by breathe.animateFloat(
-        initialValue = 0.78f, targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            tween(Motion.breathPeriodMs, easing = Motion.easeInOut), RepeatMode.Reverse,
-        ),
-        label = "bloomPulse",
-    )
-    val bloomOpacity = (0.18f + 0.37f * fraction) * bloomPulse
-
-    val sweep = Brush.sweepGradient(
-        // Sweep gradient starts at 3 o'clock by default; we rotate the gauge so the
-        // gradient walks low→high along the arc. Stops map color order of recovery.
-        *Palette.recoveryStops.toTypedArray(),
-    )
-
-    Box(
-        modifier = modifier.size(diameter),
-        contentAlignment = Alignment.Center,
+    GaugeRing(
+        fraction = (score / 100.0).toFloat(),
+        color = tierColor,
+        diameter = diameter,
+        lineWidth = lineWidth,
+        modifier = modifier,
     ) {
-        // Arc + bloom + bead drawn on a single canvas-backed box.
-        Box(
-            modifier = Modifier
-                .size(diameter)
-                .drawBehind {
-                    val stroke = lineWidth.toPx()
-                    val radius = (min(size.width, size.height) - stroke) / 2f
-                    val center = Offset(size.width / 2f, size.height / 2f)
-                    val topLeft = Offset(center.x - radius, center.y - radius)
-                    val arcSize = Size(radius * 2f, radius * 2f)
-                    val sweepStroke = Stroke(width = stroke, cap = StrokeCap.Round)
-
-                    // Faint full-span track.
-                    drawArc(
-                        color = Palette.hairline.copy(alpha = 0.55f),
-                        startAngle = startDeg,
-                        sweepAngle = spanDeg,
-                        useCenter = false,
-                        topLeft = topLeft,
-                        size = arcSize,
-                        style = sweepStroke,
-                    )
-
-                    // Filled gradient arc.
-                    if (animatedFraction > 0.001f) {
-                        drawArc(
-                            brush = sweep,
-                            startAngle = startDeg,
-                            sweepAngle = spanDeg * animatedFraction,
-                            useCenter = false,
-                            topLeft = topLeft,
-                            size = arcSize,
-                            style = sweepStroke,
-                        )
-
-                        // Luminous leading bead at the fill tip.
-                        val tipAngle = Math.toRadians((startDeg + spanDeg * animatedFraction).toDouble())
-                        val bead = Offset(
-                            center.x + radius * cos(tipAngle).toFloat(),
-                            center.y + radius * sin(tipAngle).toFloat(),
-                        )
-                        drawCircle(
-                            color = tipColor.copy(alpha = 0.7f),
-                            radius = stroke * 1.2f,
-                            center = bead,
-                        )
-                        drawCircle(
-                            color = Color.White,
-                            radius = stroke * 0.31f,
-                            center = bead,
-                        )
-                    }
-
-                    // Outer bloom — a soft, lower-opacity wide arc.
-                    if (animatedFraction > 0.001f) {
-                        drawArc(
-                            brush = sweep,
-                            startAngle = startDeg,
-                            sweepAngle = spanDeg * animatedFraction,
-                            useCenter = false,
-                            topLeft = topLeft,
-                            size = arcSize,
-                            style = Stroke(width = stroke * 1.6f, cap = StrokeCap.Round),
-                            alpha = bloomOpacity,
-                        )
-                    }
-                },
-        )
-
         if (showsLabel) {
-            // Mirror the macOS read-out sizing: display number ≈ diameter * 0.30.
-            val numberSp = diameter.value * 0.30f
+            val numberSp = diameter.value * 0.26f
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = score.toInt().toString(),
-                    style = NoopType.display(numberSp),
-                    color = Palette.textPrimary,
-                )
+                Row(verticalAlignment = Alignment.Top) {
+                    Text(
+                        text = score.toInt().toString(),
+                        style = NoopType.display(numberSp),
+                        color = Palette.textPrimary,
+                    )
+                    Text(
+                        text = "%",
+                        style = NoopType.number(numberSp * 0.45f, FontWeight.Bold),
+                        color = Palette.textPrimary,
+                        modifier = Modifier.padding(top = (numberSp * 0.10f).dp),
+                    )
+                }
                 Text(
                     text = stateWord,
                     style = NoopType.overline,
-                    color = tipColor,
+                    color = tierColor,
                 )
                 if (supporting != null) {
                     Text(
@@ -517,7 +534,7 @@ fun ScreenScaffold(
             .fillMaxWidth()
             .background(Palette.surfaceBase)
             .verticalScroll(rememberScrollState())
-            .padding(28.dp),
+            .padding(Metrics.screenPadding),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {

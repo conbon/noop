@@ -1,5 +1,6 @@
 package com.noop.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -14,6 +15,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
@@ -21,43 +24,53 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.noop.data.DailyMetric
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * Control Center — the home dashboard. A recovery ring + plain-English synthesis
- * hero, an illness banner when the watch fires, and a tile grid of the day's key
- * metrics — each tile carrying a 14-day sparkline. Ports the macOS TodayView
- * composition (Strand/Screens/TodayView.swift) with the same locked components.
+ * Home — the daily console. Trio of metric rings (Sleep / Recovery / Strain),
+ * a Health-Monitor + Last-Night card pair, a 7-day Strain & Recovery overlay,
+ * and full-width dashboard rows with day-over-day deltas.
  *
- * Sparkline series are built off the view model's `recentDays` (oldest → newest,
- * all from the my-whoop source). Steps / Weight / Calories have no on-device daily
- * source on Android, so those tiles read "—" with an empty trend until an Apple
- * Health / metricSeries bridge lands — matching the macOS sparse-data contract.
+ * The screen splits into a thin state collector ([TodayScreen]) and a stateless
+ * renderer ([TodayContent]) so JVM screenshot tests can drive it with synthetic
+ * data.
  */
 @Composable
 fun TodayScreen(viewModel: AppViewModel, onSupport: () -> Unit = {}) {
     val today by viewModel.today.collectAsStateWithLifecycle()
     val alert by viewModel.healthAlert.collectAsStateWithLifecycle()
     val days by viewModel.recentDays.collectAsStateWithLifecycle()
+    TodayContent(today = today, alert = alert, days = days, onSupport = onSupport)
+}
 
-    // 14-day trailing window (oldest → newest), with the macOS fallback: if the
-    // trailing slice has <2 points, fall back to all history so a tile never shows
-    // an empty line when data exists.
-    val window = remember14(days)
+@Composable
+internal fun TodayContent(
+    today: DailyMetric?,
+    alert: String?,
+    days: List<DailyMetric>,
+    onSupport: () -> Unit = {},
+) {
+    ScreenScaffold(title = "Today", subtitle = todayDateLine()) {
 
-    ScreenScaffold(title = "Control Center", subtitle = "Your day, read in full") {
-
-        // When there is no daily score yet (today's recovery is null / no history),
-        // lead with the "live now, history one import away" note so the empty tiles
-        // below are explained rather than just dashed out.
         if (today?.recovery == null) {
             DataPendingNote(
                 title = "Live now. Your scores are building.",
@@ -68,250 +81,458 @@ fun TodayScreen(viewModel: AppViewModel, onSupport: () -> Unit = {}) {
             )
         }
 
-        if (alert != null) IllnessBanner(alert!!)
+        if (alert != null) IllnessBanner(alert)
 
-        // HERO — ring + synthesis read-out, with a subtle always-on support affordance.
+        // TRIO — the three scores of the day, each a full-circle gauge.
         Row(verticalAlignment = Alignment.Top) {
             Box(modifier = Modifier.weight(1f)) {
-                SectionHeader("Today's Synthesis", overline = "At a glance", trailing = greetingWord())
+                TrioRow(today)
             }
-            IconButton(
-                onClick = onSupport,
-                modifier = Modifier.size(36.dp),
-            ) {
+            IconButton(onClick = onSupport, modifier = Modifier.size(32.dp)) {
                 Icon(
                     Icons.Filled.Favorite,
                     contentDescription = "Support NOOP",
                     tint = Palette.textTertiary,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(16.dp),
                 )
             }
         }
+
+        // MONITORS — health-watch summary + last night, side by side.
         Row(horizontalArrangement = Arrangement.spacedBy(Metrics.gap)) {
-            NoopCard(modifier = Modifier.weight(1f)) {
-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    RecoveryRing(
-                        score = today?.recovery ?: 0.0,
-                        supporting = ringSupporting(today),
-                        diameter = 168.dp,
-                        lineWidth = 13.dp,
-                    )
-                }
-            }
-            InsightCard(
-                modifier = Modifier.weight(1f),
-                category = "Recovery",
-                status = synthesisWord(today?.recovery),
-                detail = synthesisDetail(today),
-                statusColor = today?.recovery?.let { Palette.recoveryColor(it) } ?: Palette.textTertiary,
-            )
+            HealthMonitorCard(today = today, days = days, alert = alert, modifier = Modifier.weight(1f))
+            LastNightCard(today = today, modifier = Modifier.weight(1f))
         }
 
-        // METRICS — uniform tile grid (two columns), each tile with a 14-day sparkline.
-        Spacer(Modifier.padding(top = (Metrics.sectionGap - 20.dp) / 2))
-        SectionHeader("Key Metrics", overline = "Today", trailing = "14-day trend")
-        MetricGrid(today, window)
+        // WEEK — strain vs recovery, overlaid on one chart.
+        WeekOverlayCard(days)
+
+        // DASHBOARD — full-width metric rows with day-over-day deltas.
+        SectionHeader("My Dashboard", trailing = "vs yesterday")
+        DashboardRows(days)
+    }
+}
+
+// MARK: - Trio ring row
+
+@Composable
+private fun TrioRow(d: DailyMetric?) {
+    val sleepPct = d?.totalSleepMin?.let { ((it / SLEEP_TARGET_MIN) * 100).coerceAtMost(100.0) }
+    val recovery = d?.recovery
+    val strain = d?.strain
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+    ) {
+        RingWithLabel(
+            label = "Sleep",
+            value = sleepPct?.roundToInt()?.toString() ?: "–",
+            unit = if (sleepPct != null) "%" else null,
+            fraction = ((sleepPct ?: 0.0) / 100.0).toFloat(),
+            color = Palette.sleepBlue,
+        )
+        RingWithLabel(
+            label = "Recovery",
+            value = recovery?.roundToInt()?.toString() ?: "–",
+            unit = if (recovery != null) "%" else null,
+            fraction = ((recovery ?: 0.0) / 100.0).toFloat(),
+            color = recovery?.let { Palette.recoveryColor(it) } ?: Palette.textTertiary,
+        )
+        RingWithLabel(
+            label = "Strain",
+            value = strain?.let { String.format(Locale.US, "%.1f", it) } ?: "–",
+            unit = null,
+            fraction = ((strain ?: 0.0) / 21.0).toFloat(),
+            color = Palette.strainBlue,
+        )
+    }
+}
+
+@Composable
+private fun RingWithLabel(
+    label: String,
+    value: String,
+    unit: String?,
+    fraction: Float,
+    color: Color,
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        MetricRing(
+            value = value,
+            unit = unit,
+            fraction = fraction,
+            color = color,
+            diameter = 100.dp,
+            lineWidth = 9.dp,
+        )
+        Spacer(Modifier.height(10.dp))
+        Overline(label, color = Palette.textPrimary)
+    }
+}
+
+// MARK: - Health Monitor card
+
+/** One vital line: label, formatted value, and whether it sits inside its baseline band. */
+private data class Vital(val ok: Boolean)
+
+/**
+ * Baseline check per vital: value vs the mean of up to the prior 30 days (excluding
+ * today), with a per-metric tolerance. SpO2 and skin temp use absolute bands.
+ */
+private fun vitals(today: DailyMetric?, days: List<DailyMetric>): List<Vital> {
+    if (today == null) return emptyList()
+    val prior = days.dropLast(1).takeLast(30)
+    fun baseline(pick: (DailyMetric) -> Double?): Double? {
+        val xs = prior.mapNotNull(pick)
+        return if (xs.size >= 3) xs.average() else null
+    }
+    fun within(value: Double?, base: Double?, tolFrac: Double): Vital? {
+        if (value == null) return null
+        if (base == null) return Vital(ok = true) // no baseline yet — don't alarm
+        return Vital(ok = abs(value - base) <= base * tolFrac)
+    }
+
+    return listOfNotNull(
+        within(today.avgHrv, baseline { it.avgHrv }, 0.25),
+        within(today.restingHr?.toDouble(), baseline { it.restingHr?.toDouble() }, 0.08),
+        today.spo2Pct?.let { Vital(ok = it >= 94.0) },
+        within(today.respRateBpm, baseline { it.respRateBpm }, 0.10),
+        today.skinTempDevC?.let { Vital(ok = abs(it) <= 0.6) },
+    )
+}
+
+@Composable
+private fun HealthMonitorCard(
+    today: DailyMetric?,
+    days: List<DailyMetric>,
+    alert: String?,
+    modifier: Modifier = Modifier,
+) {
+    val vs = vitals(today, days)
+    val okCount = vs.count { it.ok }
+    val total = vs.size
+    val allOk = total > 0 && okCount == total && alert == null
+
+    NoopCard(modifier = modifier.height(120.dp)) {
+        Column {
+            Overline("Health\nMonitor", color = Palette.textPrimary)
+            Spacer(Modifier.weight(1f))
+            if (total == 0) {
+                Text("No vitals yet", style = NoopType.subhead, color = Palette.textTertiary)
+            } else {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    val tone = if (allOk) Palette.statusPositive else Palette.statusWarning
+                    Box(
+                        modifier = Modifier
+                            .size(26.dp)
+                            .background(tone.copy(alpha = 0.18f), RoundedCornerShape(7.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            if (allOk) Icons.Filled.Check else Icons.Filled.Warning,
+                            contentDescription = null,
+                            tint = tone,
+                            modifier = Modifier.size(15.dp),
+                        )
+                    }
+                    Column {
+                        Overline(
+                            if (allOk) "Within range" else "Check vitals",
+                            color = tone,
+                        )
+                        Text(
+                            "$okCount/$total metrics",
+                            style = NoopType.subhead,
+                            color = Palette.textSecondary,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Last Night card
+
+@Composable
+private fun LastNightCard(today: DailyMetric?, modifier: Modifier = Modifier) {
+    val mins = today?.totalSleepMin
+    NoopCard(modifier = modifier.height(120.dp)) {
+        Column {
+            Overline("Last\nNight", color = Palette.textPrimary)
+            Spacer(Modifier.weight(1f))
+            if (mins == null) {
+                Text("No sleep yet", style = NoopType.subhead, color = Palette.textTertiary)
+            } else {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(26.dp)
+                            .background(Palette.sleepBlue.copy(alpha = 0.18f), RoundedCornerShape(7.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Filled.Bedtime,
+                            contentDescription = null,
+                            tint = Palette.sleepBlue,
+                            modifier = Modifier.size(15.dp),
+                        )
+                    }
+                    Column {
+                        Text(
+                            formatHm(mins),
+                            style = NoopType.number(20f),
+                            color = Palette.textPrimary,
+                        )
+                        Text(
+                            today.efficiency?.let {
+                                String.format(Locale.US, "%.0f%% efficient", it)
+                            } ?: "asleep",
+                            style = NoopType.footnote,
+                            color = Palette.textSecondary,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Strain & Recovery week overlay
+
+@Composable
+private fun WeekOverlayCard(days: List<DailyMetric>) {
+    val week = days.takeLast(7)
+    NoopCard {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Overline("Strain & Recovery", color = Palette.textPrimary, modifier = Modifier.weight(1f))
+                LegendDot(Palette.strainBlue, "Strain")
+                Spacer(Modifier.width(10.dp))
+                LegendDot(Palette.recoveryHigh, "Recovery")
+            }
+            if (week.size < 2) {
+                Text(
+                    "A week of wear draws this chart.",
+                    style = NoopType.subhead,
+                    color = Palette.textTertiary,
+                )
+            } else {
+                DualLineChart(
+                    a = week.map { it.strain },
+                    aMax = 21.0,
+                    aColor = Palette.strainBlue,
+                    b = week.map { it.recovery },
+                    bMax = 100.0,
+                    bColorFor = { Palette.recoveryColor(it) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(132.dp),
+                )
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    week.forEach { d ->
+                        Text(
+                            dayInitial(d.day),
+                            style = NoopType.captionNumber,
+                            color = Palette.textSecondary,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LegendDot(color: Color, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        Box(Modifier.size(7.dp).background(color, RoundedCornerShape(50)))
+        Text(label.uppercase(), style = NoopType.overline.copy(fontSize = 9.sp), color = Palette.textSecondary)
     }
 }
 
 /**
- * The full 14-day metric grid, mirroring the macOS LazyVGrid order:
- * Recovery, Day Strain, Sleep, HRV, Resting HR, Blood Oxygen, Respiratory,
- * Steps, Weight, Calories. Each tile is a fixed-height [SparkStatTile] so the
- * grid tiles perfectly with no empty cells.
+ * Two series on one canvas, each normalized to its own fixed scale (aMax/bMax) so
+ * strain (0..21) and recovery (0..100) share the plot honestly. Series A draws as a
+ * solid line with hollow point markers; series B draws as a lighter line whose
+ * markers take the per-value color (recovery tiers). Null values break the line.
  */
 @Composable
-private fun MetricGrid(d: DailyMetric?, w: Window) {
-    val tiles = listOf<@Composable (Modifier) -> Unit>(
-        { m ->
-            SparkStatTile(
-                modifier = m,
-                label = "Recovery",
-                value = d?.recovery?.let { "${it.roundToInt()}%" } ?: "—",
-                caption = d?.recovery?.let {
-                    Palette.recoveryState(it).lowercase().replaceFirstChar { c -> c.uppercase() }
-                },
-                accent = d?.recovery?.let { Palette.recoveryColor(it) } ?: Palette.textPrimary,
-                spark = w.recovery,
-                sparkColor = Palette.accent,
-            )
-        },
-        { m ->
-            SparkStatTile(
-                modifier = m,
-                label = "Day Strain",
-                value = d?.strain?.let { String.format(Locale.US, "%.1f", it) } ?: "—",
-                caption = "of 21",
-                accent = d?.strain?.let { Palette.strainColor(it) } ?: Palette.textPrimary,
-                spark = w.strain,
-                sparkColor = Palette.strain066,
-            )
-        },
-        { m ->
-            SparkStatTile(
-                modifier = m,
-                label = "Sleep",
-                value = sleepValue(d),
-                caption = d?.efficiency?.let { String.format(Locale.US, "%.0f%% eff", it) },
-                accent = Palette.textPrimary,
-                spark = w.sleepMin,
-                sparkColor = Palette.metricPurple,
-            )
-        },
-        { m ->
-            SparkStatTile(
-                modifier = m,
-                label = "HRV",
-                value = d?.avgHrv?.let { "${it.roundToInt()}" } ?: "—",
-                caption = "ms",
-                accent = Palette.metricPurple,
-                spark = w.hrv,
-                sparkColor = Palette.metricPurple,
-            )
-        },
-        { m ->
-            SparkStatTile(
-                modifier = m,
-                label = "Resting HR",
-                value = d?.restingHr?.toString() ?: "—",
-                caption = "bpm",
-                accent = Palette.metricRose,
-                spark = w.rhr,
-                sparkColor = Palette.metricRose,
-            )
-        },
-        { m ->
-            SparkStatTile(
-                modifier = m,
-                label = "Blood Oxygen",
-                value = d?.spo2Pct?.let { String.format(Locale.US, "%.0f%%", it) } ?: "—",
-                caption = "SpO₂",
-                accent = Palette.metricCyan,
-                spark = w.spo2,
-                sparkColor = Palette.metricCyan,
-            )
-        },
-        { m ->
-            SparkStatTile(
-                modifier = m,
-                label = "Respiratory",
-                value = d?.respRateBpm?.let { String.format(Locale.US, "%.1f", it) } ?: "—",
-                caption = "rpm",
-                accent = Palette.accent,
-                spark = w.resp,
-                sparkColor = Palette.accent,
-            )
-        },
-        { m ->
-            // No on-device daily steps source on Android yet — show the empty state.
-            SparkStatTile(
-                modifier = m,
-                label = "Steps",
-                value = "—",
-                caption = "today",
-                accent = Palette.metricCyan,
-                spark = emptyList(),
-                sparkColor = Palette.metricCyan,
-            )
-        },
-        { m ->
-            SparkStatTile(
-                modifier = m,
-                label = "Weight",
-                value = "—",
-                caption = "latest",
-                accent = Palette.accent,
-                spark = emptyList(),
-                sparkColor = Palette.accent,
-            )
-        },
-        { m ->
-            SparkStatTile(
-                modifier = m,
-                label = "Calories",
-                value = "—",
-                caption = "active",
-                accent = Palette.metricAmber,
-                spark = emptyList(),
-                sparkColor = Palette.metricAmber,
-            )
-        },
-    )
+private fun DualLineChart(
+    a: List<Double?>,
+    aMax: Double,
+    aColor: Color,
+    b: List<Double?>,
+    bMax: Double,
+    bColorFor: (Double) -> Color,
+    modifier: Modifier,
+) {
+    Canvas(modifier = modifier) {
+        val n = maxOf(a.size, b.size)
+        if (n < 2) return@Canvas
+        val slot = size.width / n
+        val topPad = 10f
+        val bottomPad = 10f
+        val usable = size.height - topPad - bottomPad
 
-    // Two-column grid built from rows so tile heights stay uniform (mirrors the
-    // macOS adaptive grid; a fixed 2-up layout reads well on phone widths).
-    Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
-        tiles.chunked(2).forEach { rowTiles ->
-            Row(horizontalArrangement = Arrangement.spacedBy(Metrics.gap)) {
-                rowTiles.forEach { tile -> tile(Modifier.weight(1f)) }
-                if (rowTiles.size == 1) Spacer(Modifier.weight(1f))
+        fun x(i: Int) = slot * i + slot / 2f
+        fun y(v: Double, vMax: Double) =
+            topPad + (1f - (v / vMax).toFloat().coerceIn(0f, 1f)) * usable
+
+        // Faint horizontal gridlines at 0 / 50 / 100%.
+        listOf(0f, 0.5f, 1f).forEach { f ->
+            val gy = topPad + (1f - f) * usable
+            drawLine(
+                color = Palette.hairline,
+                start = Offset(0f, gy),
+                end = Offset(size.width, gy),
+                strokeWidth = 1f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 8f)),
+            )
+        }
+
+        fun drawSeries(
+            values: List<Double?>,
+            vMax: Double,
+            lineColor: Color,
+            markerColor: ((Double) -> Color)?,
+        ) {
+            // Line segments between consecutive non-null points.
+            var prev: Offset? = null
+            values.forEachIndexed { i, v ->
+                if (v == null) { prev = null; return@forEachIndexed }
+                val p = Offset(x(i), y(v, vMax))
+                prev?.let {
+                    drawLine(
+                        color = lineColor.copy(alpha = 0.85f),
+                        start = it,
+                        end = p,
+                        strokeWidth = 3f,
+                        cap = StrokeCap.Round,
+                    )
+                }
+                prev = p
             }
+            // Markers on top.
+            values.forEachIndexed { i, v ->
+                if (v == null) return@forEachIndexed
+                val p = Offset(x(i), y(v, vMax))
+                val mc = markerColor?.invoke(v) ?: lineColor
+                drawCircle(color = Palette.surfaceRaised, radius = 8f, center = p)
+                drawCircle(color = mc, radius = 8f, center = p, style = Stroke(width = 4f))
+            }
+        }
+
+        drawSeries(a, aMax, aColor, null)
+        drawSeries(b, bMax, Palette.textSecondary.copy(alpha = 0.5f)) { v -> bColorFor(v) }
+    }
+}
+
+// MARK: - Dashboard rows
+
+private data class RowSpec(
+    val label: String,
+    val value: (DailyMetric) -> Double?,
+    val format: (Double) -> String,
+    val accent: Color,
+    /** True when a lower value is the good direction (RHR, resp rate). */
+    val lowerIsBetter: Boolean = false,
+)
+
+private val rowSpecs = listOf(
+    RowSpec("HRV", { it.avgHrv }, { "${it.roundToInt()}" }, Palette.metricPurple),
+    RowSpec("Resting heart rate", { it.restingHr?.toDouble() }, { "${it.roundToInt()}" }, Palette.metricRose, lowerIsBetter = true),
+    RowSpec("Sleep", { it.totalSleepMin }, { formatHm(it) }, Palette.sleepBlue),
+    RowSpec("Blood oxygen", { it.spo2Pct }, { String.format(Locale.US, "%.0f%%", it) }, Palette.metricCyan),
+    RowSpec("Respiratory rate", { it.respRateBpm }, { String.format(Locale.US, "%.1f", it) }, Palette.metricAmber, lowerIsBetter = true),
+)
+
+@Composable
+private fun DashboardRows(days: List<DailyMetric>) {
+    val today = days.lastOrNull()
+    val yesterday = days.dropLast(1).lastOrNull()
+    Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
+        rowSpecs.forEach { spec ->
+            DashboardRow(
+                label = spec.label,
+                value = today?.let(spec.value),
+                prior = yesterday?.let(spec.value),
+                format = spec.format,
+                lowerIsBetter = spec.lowerIsBetter,
+            )
         }
     }
 }
 
-// MARK: - SparkStatTile
-//
-// A fixed-height metric tile: overline label, big value + caption, and a 14-day
-// Sparkline anchored along the bottom edge. Mirrors the macOS StatTile-with-sparkline
-// while reusing the locked surfaces/typography (NoopCard, Overline, NoopType). Built
-// here rather than mutating the shared StatTile so other screens keep the plain tile.
-
 @Composable
-private fun SparkStatTile(
+private fun DashboardRow(
     label: String,
-    value: String,
-    modifier: Modifier = Modifier,
-    caption: String? = null,
-    accent: Color = Palette.textPrimary,
-    spark: List<Double> = emptyList(),
-    sparkColor: Color = Palette.accent,
+    value: Double?,
+    prior: Double?,
+    format: (Double) -> String,
+    lowerIsBetter: Boolean,
 ) {
-    NoopCard(modifier = modifier.height(Metrics.tileHeight), padding = 14.dp) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Overline(label)
-            Spacer(Modifier.weight(1f))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
+    NoopCard(padding = 16.dp) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Overline(label, color = Palette.textPrimary, modifier = Modifier.weight(1f))
+            Column(horizontalAlignment = Alignment.End) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        value,
-                        style = NoopType.number(26f),
-                        color = accent,
+                        value?.let(format) ?: "–",
+                        style = NoopType.number(24f),
+                        color = Palette.textPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    if (caption != null) {
-                        Text(
-                            caption,
-                            style = NoopType.footnote,
-                            color = Palette.textTertiary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 2.dp),
-                        )
+                    if (value != null && prior != null && prior != value) {
+                        DeltaTriangle(up = value > prior, good = (value > prior) != lowerIsBetter)
                     }
                 }
-                if (spark.size >= 2) {
-                    // Sparkline forces fillMaxWidth + a fixed height internally, so we
-                    // bound it in a sized Box to keep it a compact inline trend.
-                    Box(
-                        modifier = Modifier
-                            .padding(start = 8.dp, bottom = 2.dp)
-                            .width(64.dp)
-                            .height(22.dp),
-                    ) {
-                        Sparkline(values = spark, color = sparkColor)
-                    }
+                if (prior != null) {
+                    Text(
+                        format(prior),
+                        style = NoopType.captionNumber,
+                        color = Palette.textTertiary,
+                    )
                 }
             }
         }
     }
 }
 
-// MARK: - Illness banner (ported from HealthAlertBanner.swift)
+/** Small ▲/▼ delta marker: green when the move is good, amber when not. */
+@Composable
+private fun DeltaTriangle(up: Boolean, good: Boolean) {
+    val color = if (good) Palette.statusPositive else Palette.statusWarning
+    Canvas(modifier = Modifier.size(9.dp)) {
+        val path = Path().apply {
+            if (up) {
+                moveTo(size.width / 2f, 0f); lineTo(size.width, size.height); lineTo(0f, size.height)
+            } else {
+                moveTo(0f, 0f); lineTo(size.width, 0f); lineTo(size.width / 2f, size.height)
+            }
+            close()
+        }
+        drawPath(path, color = color, style = androidx.compose.ui.graphics.drawscope.Fill)
+    }
+}
+
+// MARK: - Illness banner
 
 @Composable
 private fun IllnessBanner(message: String) {
@@ -330,88 +551,22 @@ private fun IllnessBanner(message: String) {
     }
 }
 
-// MARK: - 14-day sparkline windows (built from recentDays)
+// MARK: - Formatting helpers
 
-/** The trailing-window series for each tile, oldest → newest. */
-private data class Window(
-    val recovery: List<Double>,
-    val strain: List<Double>,
-    val sleepMin: List<Double>,
-    val hrv: List<Double>,
-    val rhr: List<Double>,
-    val spo2: List<Double>,
-    val resp: List<Double>,
-)
+/** Sleep-performance target: 8h. */
+private const val SLEEP_TARGET_MIN = 480.0
 
-/**
- * Build the 14-day windows from `recentDays`. Each series drops null days then takes
- * the trailing 14 points; if that slice has <2 points it falls back to all available
- * history (the macOS sparse-data rule) so a tile renders a line whenever data exists.
- */
-@Composable
-private fun remember14(days: List<com.noop.data.DailyMetric>): Window =
-    androidx.compose.runtime.remember(days) {
-        fun series(pick: (DailyMetric) -> Double?): List<Double> {
-            val all = days.mapNotNull(pick)
-            if (all.isEmpty()) return emptyList()
-            val windowed = all.takeLast(14)
-            return if (windowed.size >= 2) windowed else all
-        }
-        Window(
-            recovery = series { it.recovery },
-            strain = series { it.strain },
-            sleepMin = series { it.totalSleepMin },
-            hrv = series { it.avgHrv },
-            rhr = series { it.restingHr?.toDouble() },
-            spo2 = series { it.spo2Pct },
-            resp = series { it.respRateBpm },
-        )
-    }
-
-// MARK: - Derived text (ported from TodayView.swift)
-
-private fun greetingWord(): String {
-    val h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-    return when {
-        h < 12 -> "Good morning"
-        h < 17 -> "Good afternoon"
-        else -> "Good evening"
-    }
+private fun formatHm(mins: Double): String {
+    val total = mins.roundToInt()
+    return "${total / 60}:" + String.format(Locale.US, "%02d", total % 60)
 }
 
-private fun synthesisWord(score: Double?): String {
-    if (score == null) return "No Data"
-    return when {
-        score < 25 -> "Depleted"
-        score < 50 -> "Low"
-        score < 70 -> "Steady"
-        score < 88 -> "Primed"
-        else -> "Peak"
-    }
+private fun todayDateLine(): String {
+    val now = LocalDate.now()
+    return now.format(DateTimeFormatter.ofPattern("EEEE, MMM d", Locale.US))
 }
 
-private fun synthesisDetail(d: DailyMetric?): String {
-    val rec = d?.recovery
-        ?: return "No metrics yet. Sync your strap to begin."
-    val recPart = when {
-        rec < 50 -> "Recovery is low"
-        rec < 70 -> "Recovery is steady"
-        else -> "Recovery is strong"
-    }
-    val sleepPart = d.totalSleepMin?.let { mins ->
-        if (mins / 60.0 >= 7) " and sleep was consistent" else " but sleep ran short"
-    } ?: ""
-    return "$recPart$sleepPart."
-}
-
-private fun ringSupporting(d: DailyMetric?): String {
-    val hrv = d?.avgHrv?.let { "${it.roundToInt()} ms" } ?: "— ms"
-    val rhr = d?.restingHr?.toString() ?: "—"
-    return "HRV $hrv · RHR $rhr"
-}
-
-private fun sleepValue(d: DailyMetric?): String {
-    val m = d?.totalSleepMin ?: return "—"
-    val total = m.roundToInt()
-    return "${total / 60}h ${total % 60}m"
-}
+/** First letter of the weekday for an ISO `yyyy-MM-dd` day key ("M", "T", …). */
+private fun dayInitial(day: String): String = runCatching {
+    LocalDate.parse(day).format(DateTimeFormatter.ofPattern("EEEEE", Locale.US))
+}.getOrDefault("·")
