@@ -10,11 +10,14 @@ import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.noop.ble.LiveState
 import com.noop.data.DailyMetric
+import com.noop.data.HrSample
+import com.noop.data.SleepSession
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.time.LocalDate
+import java.time.ZoneId
 import kotlin.math.cos
 
 /**
@@ -53,8 +56,25 @@ class ScreenScreenshotTest {
 
     @Test
     fun sleep() {
+        val sessions = fixtureSessions(days)
         captureRoboImage("build/outputs/roborazzi/sleep.png") {
-            NoopTheme { SleepContent(days = days, session = null) }
+            NoopTheme {
+                SleepContent(
+                    days = days,
+                    sessions = sessions,
+                    hr = fixtureHr(sessions.last()),
+                    series = mapOf("sleepNeedMin" to days.associate { it.day to 470.0 + 20 * cos(it.day.hashCode() % 7 / 2.0) }),
+                )
+            }
+        }
+    }
+
+    /** Totals-only night (the WHOOP-import shape) — exercises the durations fallback. */
+    @Test
+    fun sleepImportedNight() {
+        val sessions = fixtureSessions(days, timedLatest = false)
+        captureRoboImage("build/outputs/roborazzi/sleep_imported.png") {
+            NoopTheme { SleepContent(days = days, sessions = sessions, hr = emptyList()) }
         }
     }
 
@@ -100,6 +120,74 @@ class ScreenScreenshotTest {
             }
         }
     }
+}
+
+/**
+ * One sleep session per fixture day, waking on that day: bed ~23:00 ± 40 min, wake
+ * ~07:15 ± 30 min. The latest night carries TIMED stage spans (the on-device stager's
+ * `{start,end,stage}` shape) unless [timedLatest] is false; earlier nights carry the
+ * WHOOP-import totals shape `{stage,min}`.
+ */
+internal fun fixtureSessions(days: List<DailyMetric>, timedLatest: Boolean = true): List<SleepSession> {
+    val zone = ZoneId.systemDefault()
+    return days.mapIndexed { i, d ->
+        val date = LocalDate.parse(d.day)
+        val wake = date.atTime(7, 15).plusMinutes((30 * cos(i * 0.9)).toLong()).atZone(zone).toEpochSecond()
+        val onset = date.minusDays(1).atTime(23, 0).plusMinutes((40 * cos(i * 1.3)).toLong()).atZone(zone).toEpochSecond()
+        val timed = timedLatest && i == days.lastIndex
+        SleepSession(
+            deviceId = "my-whoop",
+            startTs = onset,
+            endTs = wake,
+            efficiency = d.efficiency,
+            stagesJSON = if (timed) timedStagesJson(onset, wake) else totalsStagesJson(d),
+        )
+    }
+}
+
+/** A plausible architecture: light → deep cycles early, REM later, brief wakes throughout. */
+private fun timedStagesJson(onset: Long, wake: Long): String {
+    val pattern = listOf(
+        "awake" to 12, "light" to 25, "deep" to 45, "light" to 20, "awake" to 6, "deep" to 40,
+        "light" to 30, "rem" to 18, "light" to 25, "deep" to 30, "light" to 20, "awake" to 10,
+        "rem" to 25, "light" to 35, "rem" to 30, "awake" to 14, "light" to 30, "rem" to 22,
+        "awake" to 20, "light" to 30, "awake" to 25,
+    )
+    val totalMin = pattern.sumOf { it.second }.toDouble()
+    val scale = (wake - onset) / (totalMin * 60.0)
+    var t = onset
+    val arr = org.json.JSONArray()
+    for ((stage, min) in pattern) {
+        val end = t + (min * 60 * scale).toLong()
+        arr.put(org.json.JSONObject().put("start", t).put("end", end).put("stage", stage))
+        t = end
+    }
+    return arr.toString()
+}
+
+private fun totalsStagesJson(d: DailyMetric): String = org.json.JSONArray().apply {
+    put(org.json.JSONObject().put("stage", "light").put("min", d.lightMin))
+    put(org.json.JSONObject().put("stage", "deep").put("min", d.deepMin))
+    put(org.json.JSONObject().put("stage", "rem").put("min", d.remMin))
+}.toString()
+
+/** One HR sample a minute across the session: ~52–72 bpm asleep, spiky around wakes. */
+internal fun fixtureHr(s: SleepSession): List<HrSample> {
+    val slack = ((s.endTs - s.startTs) * 0.06).toLong()
+    val out = ArrayList<HrSample>()
+    var t = s.startTs - slack
+    var i = 0
+    while (t <= s.endTs + slack) {
+        val frac = (t - s.startTs).toDouble() / (s.endTs - s.startTs)
+        val outside = frac < 0.0 || frac > 1.0
+        val base = if (outside) 80.0 else 62.0 - 8 * cos(frac * 6.3) - 4 * frac
+        val jitter = 3.5 * cos(i * 1.7) + 2.5 * cos(i * 0.37)
+        val spike = if (i % 53 == 0 && !outside) 22.0 else 0.0
+        out.add(HrSample("my-whoop", t, (base + jitter + spike).toInt().coerceIn(40, 130)))
+        t += 60
+        i++
+    }
+    return out
 }
 
 /**

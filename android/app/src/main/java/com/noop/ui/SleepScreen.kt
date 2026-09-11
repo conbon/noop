@@ -1,6 +1,9 @@
 package com.noop.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,7 +12,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -17,758 +22,480 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.noop.data.DailyMetric
+import com.noop.data.HrSample
 import com.noop.data.SleepSession
 import org.json.JSONArray
-import org.json.JSONObject
-import java.text.SimpleDateFormat
-import java.util.Date
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
-import java.util.TimeZone
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /**
- * Sleep — Whoop-sleep clarity on the locked Noop component system. Mirrors the macOS
- * SleepView (Strand/Screens/SleepView.swift) section-for-section:
+ * Sleep — last night in depth, then the week.
  *
- *   1. HERO "Last night" — the stage breakdown. A Hypnogram when stage minutes are
- *      present (deep / rem / light / awake reconstructed end-to-end), with a footer
- *      of REM / Deep / Light / Awake each "Xh Ym · NN%".
- *   2. A uniform grid of fixed StatTiles, each with a sparkline + "vs typical" caption:
- *      Sleep Performance, Efficiency, Consistency, Hours vs Needed, Restorative,
- *      Respiratory, Sleep Debt.
- *   3. "Stages vs typical" — Deep / REM / Light horizontal bars showing last-night
- *      minutes with a marker at the personal typical (mean).
- *   4. A 14-day asleep-hours trend LineChart.
+ *  1. HOURS OF SLEEP: the night's heart-rate trace with sleep onset/wake bounds and four
+ *     selectable stage rows (Awake / Light / SWS / REM). Selecting a stage paints where it
+ *     fell on the trace and in its strip. Timed stages come from the on-device stager;
+ *     WHOOP-imported nights only carry totals, so their strips show shares instead.
+ *  2. WEEKLY TRENDS: performance, hours vs need (hours and %), restorative sleep,
+ *     consistency (bed → wake bars), efficiency, respiratory rate — one card each.
  *
- * Data wiring is faithful to the macOS screen: the "typical" is the mean across the
- * cached daily metrics; the per-night stage split comes from the latest DailyMetric's
- * deep/rem/light minutes. The macOS export carried a per-night stagesJSON minutes dict;
- * Android's sleepSession.stagesJSON is a verbatim segments array used here only for the
- * onset/wake clock labels + efficiency. Where macOS reconstructed an epoch-level
- * timeline it had none either (durations only), so the hypnogram is the same plausible
- * architecture (deep early, REM later, awake last). No data is fabricated: with no
- * nights the screen shows an honest empty state.
+ * Split into a collector ([SleepScreen]) and a stateless renderer ([SleepContent]) so
+ * screenshot tests can drive it with synthetic nights.
  */
 @Composable
 fun SleepScreen(vm: AppViewModel) {
     val days by vm.recentDays.collectAsStateWithLifecycle()
 
-    // The latest sleep session (for onset/wake clock + stored efficiency). Loaded once
-    // from the repo; the my-whoop daily metrics drive everything else and arrive via the
-    // shared recentDays flow.
-    var session by remember { mutableStateOf<SleepSession?>(null) }
-    LaunchedEffect(Unit) {
+    var sessions by remember { mutableStateOf<List<SleepSession>>(emptyList()) }
+    var hr by remember { mutableStateOf<List<HrSample>>(emptyList()) }
+    var series by remember { mutableStateOf<Map<String, Map<String, Double>>>(emptyMap()) }
+
+    LaunchedEffect(days.lastOrNull()?.day) {
         val now = System.currentTimeMillis() / 1000L
-        val from = now - 60L * 24L * 60L * 60L // 60-day lookback
-        session = runCatching {
-            // Merged: imported WHOOP sessions win per night; on-device computed
-            // ("my-whoop-noop") sessions gap-fill so strap-only nights still show a clock.
-            vm.repo.sleepSessionsMerged("my-whoop", from, now).maxByOrNull { it.startTs }
-        }.getOrNull()
+        val from = now - 21L * 24L * 60L * 60L
+        val loaded = runCatching { vm.repo.sleepSessionsMerged("my-whoop", from, now) }.getOrDefault(emptyList())
+        sessions = loaded
+        // HR for the latest main sleep, with a little slack either side for the trace to run past the bounds.
+        latestMainSession(loaded)?.let { s ->
+            val slack = ((s.endTs - s.startTs) * 0.06).toLong()
+            hr = runCatching {
+                vm.repo.hrSamples("my-whoop", s.startTs - slack, s.endTs + slack, limit = 20_000)
+            }.getOrDefault(emptyList())
+        }
+        series = SERIES_KEYS.associateWith { key ->
+            runCatching { vm.repo.metricSeries("my-whoop", key, "0000-01-01", "9999-12-31") }
+                .getOrDefault(emptyList())
+                .associate { it.day to it.value }
+        }
     }
 
-    SleepContent(days = days, session = session)
+    SleepContent(days = days, sessions = sessions, hr = hr, series = series)
 }
+
+private val SERIES_KEYS = listOf("sleepNeedMin", "sleepPerformancePct")
 
 /** Stateless body — screenshot tests drive this directly with synthetic data. */
 @Composable
-internal fun SleepContent(days: List<DailyMetric>, session: SleepSession?) {
-    val model = remember(days, session) { buildSleepModel(days, session) }
-
-    ScreenScaffold(title = "Sleep", subtitle = "Last night, read in two seconds.") {
-        if (model == null) {
-            SleepEmptyState()
-        } else {
-            Hero(model)
-            Spacer(Modifier.height(Metrics.sectionGap - 20.dp))
-            MetricGrid(model)
-            Spacer(Modifier.height(Metrics.sectionGap - 20.dp))
-            StagesVsTypical(model)
-            Spacer(Modifier.height(Metrics.sectionGap - 20.dp))
-            DurationTrend(model)
-        }
-    }
-}
-
-// MARK: - 1. HERO — stage breakdown
-
-@Composable
-private fun Hero(m: SleepModel) {
-    val s = m.stages
-    Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
-        SectionHeader(
-            "Last night",
-            overline = "Sleep",
-            trailing = m.clockLabel,
-        )
-        ChartCard(
-            title = "Stage breakdown",
-            subtitle = "${durationText(s.total)} in bed · ${m.efficiencyText} efficiency",
-            trailing = durationText(s.asleep),
-            footer = {
-                ChartFooter(
-                    listOf(
-                        "REM" to "${durationText(s.rem)} · ${pct(s.rem, s.total)}%",
-                        "Deep" to "${durationText(s.deep)} · ${pct(s.deep, s.total)}%",
-                        "Light" to "${durationText(s.light)} · ${pct(s.light, s.total)}%",
-                        "Awake" to "${durationText(s.awake)} · ${pct(s.awake, s.total)}%",
-                    ),
-                )
-            },
-        ) {
-            // Reconstructed stage architecture: light → deep → light → rem → light → awake.
-            val segments = stageSegments(s)
-            if (segments.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Box(modifier = Modifier.fillMaxWidth().height(34.dp)) {
-                        Hypnogram(
-                            stages = segments,
-                            modifier = Modifier.fillMaxWidth().height(34.dp),
-                        )
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        StageLegend("Deep", Palette.sleepDeep)
-                        StageLegend("Light", Palette.sleepLight)
-                        StageLegend("REM", Palette.sleepREM)
-                        StageLegend("Awake", Palette.sleepAwake)
-                    }
-                }
-            } else {
-                Text(
-                    "No stage breakdown for the latest night.",
-                    style = NoopType.subhead,
-                    color = Palette.textTertiary,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun StageLegend(label: String, color: Color) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier
-                .height(9.dp)
-                .width(9.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(color),
-        )
-        Text(label, style = NoopType.footnote, color = Palette.textTertiary)
-    }
-}
-
-// MARK: - 2. Metric grid (uniform fixed-height tiles, each with a sparkline)
-
-@Composable
-private fun MetricGrid(m: SleepModel) {
-    val tiles = listOf<@Composable (Modifier) -> Unit>(
-        { mod ->
-            SparkTile(
-                mod, "Sleep Performance",
-                value = pctValue(m.performance.latest),
-                caption = vsTypical(m.performance.latest, m.performance.typical, "%"),
-                accent = m.performance.latest?.let { Palette.recoveryColor(it) } ?: Palette.textPrimary,
-                spark = m.performance.series, sparkColor = Palette.accent,
-            )
-        },
-        { mod ->
-            SparkTile(
-                mod, "Efficiency",
-                value = pctValue(m.efficiency.latest),
-                caption = vsTypical(m.efficiency.latest, m.efficiency.typical, "%"),
-                accent = Palette.statusPositive,
-                spark = m.efficiency.series, sparkColor = Palette.statusPositive,
-            )
-        },
-        { mod ->
-            SparkTile(
-                mod, "Consistency",
-                value = pctValue(m.consistency.latest),
-                caption = vsTypical(m.consistency.latest, m.consistency.typical, "%"),
-                accent = m.consistency.latest?.let { Palette.recoveryColor(it) } ?: Palette.textPrimary,
-                spark = m.consistency.series, sparkColor = Palette.metricCyan,
-            )
-        },
-        { mod ->
-            SparkTile(
-                mod, "Hours vs Needed",
-                value = pctValue(m.hoursVsNeeded.latest),
-                caption = vsTypical(m.hoursVsNeeded.latest, m.hoursVsNeeded.typical, "%"),
-                accent = m.hoursVsNeeded.latest?.let { Palette.recoveryColor(minOf(100.0, it)) } ?: Palette.textPrimary,
-                spark = m.hoursVsNeeded.series, sparkColor = Palette.accent,
-            )
-        },
-        { mod ->
-            SparkTile(
-                mod, "Restorative",
-                value = pctValue(m.restorative.latest),
-                caption = vsTypical(m.restorative.latest, m.restorative.typical, "%"),
-                accent = Palette.sleepREM,
-                spark = m.restorative.series, sparkColor = Palette.sleepREM,
-            )
-        },
-        { mod ->
-            SparkTile(
-                mod, "Respiratory",
-                value = m.respiratory.latest?.let { String.format(Locale.US, "%.1f", it) } ?: "—",
-                caption = vsTypical(m.respiratory.latest, m.respiratory.typical, " rpm", decimals = 1),
-                accent = Palette.metricPurple,
-                spark = m.respiratory.series, sparkColor = Palette.metricPurple,
-            )
-        },
-        { mod ->
-            SparkTile(
-                mod, "Sleep Debt",
-                value = m.sleepDebt.latest?.let { durationText(it) } ?: "—",
-                caption = debtCaption(m.sleepDebt.latest),
-                accent = debtColor(m.sleepDebt.latest),
-                spark = m.sleepDebt.series, sparkColor = Palette.metricRose,
-            )
-        },
-    )
-
-    Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
-        SectionHeader("Night detail", overline = "Metrics", trailing = "vs typical")
-        // Two-up rows keep every tile the same fixed height with no empty cells.
-        tiles.chunked(2).forEach { rowTiles ->
-            Row(horizontalArrangement = Arrangement.spacedBy(Metrics.gap)) {
-                rowTiles.forEach { it(Modifier.weight(1f)) }
-                if (rowTiles.size == 1) Spacer(Modifier.weight(1f))
-            }
-        }
-    }
-}
-
-// MARK: - 3. Stages vs typical
-
-@Composable
-private fun StagesVsTypical(m: SleepModel) {
-    val s = m.stages
-    Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
-        SectionHeader("Stages vs typical", overline = "Last night", trailing = "marker = your mean")
-        NoopCard {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                StageRow("Deep", last = s.deep, typical = m.typicalDeepMin, color = Palette.sleepDeep)
-                Hairline()
-                StageRow("REM", last = s.rem, typical = m.typicalRemMin, color = Palette.sleepREM)
-                Hairline()
-                StageRow("Light", last = s.light, typical = m.typicalLightMin, color = Palette.sleepLight)
-            }
-        }
-    }
-}
-
-@Composable
-private fun Hairline() {
-    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
-}
-
-/** One stage bar: last-night minutes filled, with a vertical marker at the typical mean. */
-@Composable
-private fun StageRow(label: String, last: Double, typical: Double?, color: Color) {
-    val scaleMax = max(last, typical ?: 0.0) * 1.18
-    val scale = if (scaleMax > 0.0) scaleMax else 1.0
-    val deltaText: String = run {
-        if (typical == null || typical <= 0.0) {
-            ""
-        } else {
-            val diff = last - typical
-            val sign = if (diff >= 0) "+" else "−"
-            "$sign${durationText(abs(diff))} vs typ"
-        }
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Overline(label, modifier = Modifier.weight(1f))
-            Text(durationText(last), style = NoopType.captionNumber, color = Palette.textPrimary)
-            if (deltaText.isNotEmpty()) {
-                Text(
-                    deltaText,
-                    style = NoopType.footnote,
-                    color = if (last >= (typical ?: last)) Palette.statusPositive else Palette.statusWarning,
-                    modifier = Modifier.padding(start = 8.dp),
-                )
-            }
-        }
-        // Track + last-night fill + typical marker.
-        val fillFrac = (last / scale).coerceIn(0.0, 1.0).toFloat()
-        val markerFrac = typical?.takeIf { it > 0.0 }?.let { (it / scale).coerceIn(0.0, 1.0).toFloat() }
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(10.dp)
-                .clip(RoundedCornerShape(50))
-                .background(Palette.surfaceInset)
-                .drawBehind {
-                    // last-night fill
-                    if (fillFrac > 0f) {
-                        drawRoundRectFill(color, fillFrac)
-                    }
-                    // typical marker
-                    if (markerFrac != null) {
-                        val x = (size.width * markerFrac).coerceIn(1f, size.width - 1f)
-                        drawLine(
-                            color = Palette.textPrimary,
-                            start = Offset(x, 0f),
-                            end = Offset(x, size.height),
-                            strokeWidth = 2f,
-                            cap = StrokeCap.Round,
-                        )
-                    }
-                },
-        )
-    }
-}
-
-private fun DrawScope.drawRoundRectFill(color: Color, frac: Float) {
-    val w = (size.width * frac).coerceAtLeast(size.height)
-    val r = size.height / 2f
-    drawRoundRect(
-        color = color,
-        size = Size(w, size.height),
-        cornerRadius = CornerRadius(r, r),
-    )
-}
-
-// MARK: - 4. 14-day asleep-hours trend
-
-@Composable
-private fun DurationTrend(m: SleepModel) {
-    val pts = m.trendHours
-    val avg = m.typicalTotalMin?.let { it / 60.0 }
-    Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
-        SectionHeader("Asleep duration", overline = "Trend", trailing = "Last 14 days")
-        ChartCard(
-            title = "Hours asleep",
-            subtitle = "Per night, trailing 14 days",
-            trailing = avg?.let { String.format(Locale.US, "%.1f h avg", it) },
-            footer = {
-                ChartFooter(
-                    listOf(
-                        "Avg" to (avg?.let { String.format(Locale.US, "%.1f h", it) } ?: "—"),
-                        "Min" to (pts.minOrNull()?.let { String.format(Locale.US, "%.1f h", it) } ?: "—"),
-                        "Max" to (pts.maxOrNull()?.let { String.format(Locale.US, "%.1f h", it) } ?: "—"),
-                        "Nights" to "${pts.size}",
-                    ),
-                )
-            },
-        ) {
-            if (pts.size >= 2) {
-                LineChart(
-                    values = pts,
-                    modifier = Modifier.fillMaxWidth().height(Metrics.chartHeight - 90.dp),
-                    color = Palette.accent,
-                    fill = true,
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(Metrics.chartHeight - 90.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Palette.surfaceInset),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("Not enough nights yet.", style = NoopType.subhead, color = Palette.textTertiary)
-                }
-            }
-        }
-    }
-}
-
-// MARK: - ChartCard / ChartFooter (local — mirror the macOS ChartCard the screen used)
-
-/**
- * The chart container the macOS screen leaned on: a NoopCard with a header (overline-
- * style title + subtitle + trailing read-out), the chart body, then a footer row of
- * label/value pairs. Kept local so the shared component set stays minimal.
- */
-@Composable
-private fun ChartCard(
-    title: String,
-    subtitle: String,
-    trailing: String?,
-    footer: @Composable () -> Unit,
-    chart: @Composable () -> Unit,
+internal fun SleepContent(
+    days: List<DailyMetric>,
+    sessions: List<SleepSession>,
+    hr: List<HrSample>,
+    series: Map<String, Map<String, Double>> = emptyMap(),
 ) {
-    NoopCard(padding = 16.dp) {
+    val night = remember(days, sessions) { buildNight(days, sessions) }
+    val week = remember(days, sessions, series) { buildWeek(days, sessions, series) }
+
+    ScreenScaffold(title = "Sleep", subtitle = "Today vs. prior 30 days") {
+        if (night == null) {
+            DataPendingNote(
+                title = "No nights here yet",
+                body = "Wear the strap overnight, or import your WHOOP export in Settings, and " +
+                    "last night's stages and your weekly sleep trends appear here.",
+            )
+        } else {
+            HoursOfSleepCard(night, hr)
+        }
+
+        if (week.labels.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            SectionHeader("Weekly Trends")
+
+            WeekCard("Sleep performance") {
+                WeekBarChart(week.performancePct, Palette.sleepBlue, { "${it.roundToInt()}%" }, max = 100.0)
+                WeekLabels(week.labels)
+            }
+
+            WeekCard("Hours vs. needed (hours)") {
+                Legend(listOf(Palette.sleepBlue to "Hours of sleep", Palette.recoveryHigh to "Sleep needed"))
+                WeekDualLineChart(week.hours, week.needHours, Palette.sleepBlue, Palette.recoveryHigh, ::hm)
+                WeekLabels(week.labels)
+            }
+
+            WeekCard("Hours vs. needed (%)") {
+                WeekBarChart(week.hoursVsNeedPct, Palette.sleepBlue, { "${it.roundToInt()}%" }, max = 100.0)
+                WeekLabels(week.labels)
+            }
+
+            WeekCard("Restorative sleep (hours)") {
+                Legend(listOf(Palette.sleepDeep to "Deep sleep", Palette.sleepREM to "REM sleep"))
+                WeekStackedBarChart(
+                    parts = listOf(week.deepHours, week.remHours),
+                    colors = listOf(Palette.sleepDeep, Palette.sleepREM),
+                    format = ::hm,
+                )
+                WeekLabels(week.labels)
+            }
+
+            WeekCard("Sleep consistency", trailing = "dashed = your usual bed & wake") {
+                ConsistencyChart(week.nights)
+                WeekLabels(week.labels, modifier = Modifier.padding(start = 44.dp))
+            }
+
+            WeekCard("Sleep efficiency") {
+                WeekEfficiencyRow(week.efficiencyPct)
+                WeekLabels(week.labels)
+            }
+
+            WeekCard("Respiratory rate (rpm)") {
+                WeekDualLineChart(
+                    a = week.respRpm, b = List(week.respRpm.size) { null },
+                    aColor = Palette.metricPurple, bColor = Palette.metricPurple,
+                    format = { String.format(Locale.US, "%.1f", it) }, height = 120.dp,
+                )
+                WeekLabels(week.labels)
+            }
+        }
+    }
+}
+
+// MARK: - 1. Hours of Sleep card
+
+private val STAGES = listOf("awake" to "Awake", "light" to "Light", "deep" to "SWS (Deep)", "rem" to "REM")
+
+@Composable
+private fun HoursOfSleepCard(n: Night, hr: List<HrSample>) {
+    var selected by rememberSaveable { mutableStateOf("light") }
+
+    NoopCard(padding = 18.dp) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Row(verticalAlignment = Alignment.Top) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(title, style = NoopType.headline, color = Palette.textPrimary)
-                    Text(subtitle, style = NoopType.footnote, color = Palette.textSecondary)
+            Overline("Hours of sleep", color = Palette.textPrimary)
+
+            // Headline duration + delta vs the prior 30 days.
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(hm(n.asleepMin / 60.0), style = NoopType.number(40f), color = Palette.textPrimary)
+                    n.typicalAsleepMin?.let { t ->
+                        if (abs(n.asleepMin - t) >= 1.0) DeltaMarker(up = n.asleepMin > t, good = n.asleepMin >= t)
+                    }
                 }
-                if (trailing != null) {
-                    Text(trailing, style = NoopType.number(18f), color = Palette.textPrimary)
+                n.typicalAsleepMin?.let {
+                    Text(hm(it / 60.0), style = NoopType.captionNumber, color = Palette.textSecondary)
                 }
             }
-            chart()
-            footer()
+
+            NightChart(
+                hr = hr, onset = n.onset, wake = n.wake,
+                spans = n.spans, selectedStage = selected,
+            )
+
+            HairlineDivider()
+
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .size(width = 14.dp, height = 18.dp)
+                        .border(1.5.dp, Palette.textPrimary, RoundedCornerShape(2.dp))
+                        .background(Palette.surfaceOverlay, RoundedCornerShape(2.dp)),
+                )
+                Spacer(Modifier.width(10.dp))
+                Overline("Typical range", color = Palette.textPrimary, modifier = Modifier.weight(1f))
+                Overline("Duration", color = Palette.textSecondary)
+                Spacer(Modifier.width(8.dp))
+                Text(hm(n.inBedMin / 60.0), style = NoopType.number(20f), color = Palette.textPrimary)
+            }
+
+            STAGES.forEach { (key, label) ->
+                val minutes = n.minutesOf(key)
+                StageRow(
+                    stage = key, label = label, minutes = minutes, night = n,
+                    selected = selected == key, onSelect = { selected = key },
+                )
+            }
+
+            if (n.spans == null) {
+                Text(
+                    "Stage timing isn't in WHOOP exports — each bar shows that stage's share of the night. " +
+                        "Nights scored from the strap show exactly when each stage happened.",
+                    style = NoopType.footnote, color = Palette.textTertiary,
+                )
+            }
         }
     }
 }
 
-/** A footer strip of label/value pairs, evenly distributed. */
 @Composable
-private fun ChartFooter(items: List<Pair<String, String>>) {
-    Row(modifier = Modifier.fillMaxWidth()) {
-        items.forEach { (label, value) ->
-            Column(modifier = Modifier.weight(1f)) {
-                Overline(label, color = Palette.textTertiary)
-                Text(value, style = NoopType.captionNumber, color = Palette.textPrimary)
-            }
-        }
-    }
-}
-
-// MARK: - SparkTile (fixed-height metric tile with a trailing 30-day sparkline)
-
-@Composable
-private fun SparkTile(
-    modifier: Modifier,
+private fun StageRow(
+    stage: String,
     label: String,
-    value: String,
-    caption: String?,
-    accent: Color,
-    spark: List<Double>,
-    sparkColor: Color,
+    minutes: Double,
+    night: Night,
+    selected: Boolean,
+    onSelect: () -> Unit,
 ) {
-    NoopCard(modifier = modifier.height(Metrics.tileHeight), padding = 14.dp) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Overline(label)
+    val color = stageColor(stage)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }, onClick = onSelect),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            RadioDot(selected)
+            Overline(label, color = Palette.textPrimary)
+            Text(
+                "${pct(minutes, night.inBedMin)}%",
+                style = NoopType.captionNumber,
+                color = if (selected) color else Palette.textSecondary,
+            )
             Spacer(Modifier.weight(1f))
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        value,
-                        style = NoopType.number(24f),
-                        color = accent,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (caption != null) {
-                        Text(
-                            caption,
-                            style = NoopType.footnote,
-                            color = Palette.textTertiary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 2.dp),
-                        )
-                    }
-                }
-                val tail = spark.takeLast(30)
-                if (tail.size >= 2) {
-                    Box(
-                        modifier = Modifier
-                            .padding(start = 8.dp, bottom = 2.dp)
-                            .width(58.dp)
-                            .height(22.dp),
-                    ) {
-                        Sparkline(values = tail, color = sparkColor)
-                    }
-                }
-            }
+            Text(hm(minutes / 60.0), style = NoopType.number(20f), color = Palette.textPrimary)
         }
+        StageStrip(
+            stage = stage, spans = night.spans, onset = night.onset, wake = night.wake,
+            stageMinutes = minutes, totalMinutes = night.inBedMin,
+            typicalRange = night.typicalRange[stage], selected = selected,
+            modifier = Modifier.padding(start = 36.dp),
+        )
     }
 }
 
-// MARK: - Empty state
+@Composable
+private fun RadioDot(selected: Boolean) {
+    Box(
+        modifier = Modifier
+            .size(24.dp)
+            .border(2.dp, Palette.textPrimary, CircleShape)
+            .background(if (selected) Palette.textPrimary else Color.Transparent, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (selected) Box(Modifier.size(8.dp).background(Palette.surfaceBase, CircleShape))
+    }
+}
 
 @Composable
-private fun SleepEmptyState() {
-    DataPendingNote(
-        title = "No nights here yet",
-        body = "No nights here yet. Import your WHOOP export in Data Sources to see " +
-            "every night, your sleep stages and trends straight away.",
+private fun DeltaMarker(up: Boolean, good: Boolean) {
+    val color = if (good) Palette.statusPositive else Palette.statusWarning
+    Box(
+        Modifier.size(10.dp).drawBehind {
+            val p = Path().apply {
+                if (up) { moveTo(size.width / 2f, 0f); lineTo(size.width, size.height); lineTo(0f, size.height) }
+                else { moveTo(0f, 0f); lineTo(size.width, 0f); lineTo(size.width / 2f, size.height) }
+                close()
+            }
+            drawPath(p, color, style = Fill)
+        },
     )
 }
 
-// MARK: - Model + derivation (faithful to SleepView.swift)
-
-/** Stage minutes for a single night (mirrors the macOS Stages struct). */
-private data class Stages(
-    val awake: Double,
-    val light: Double,
-    val deep: Double,
-    val rem: Double,
-) {
-    /** Total time in bed (includes awake). */
-    val total: Double get() = awake + light + deep + rem
-
-    /** Asleep time = total minus awake. */
-    val asleep: Double get() = light + deep + rem
+@Composable
+private fun HairlineDivider() {
+    Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
 }
 
-/** (latest, typical mean, full history) per metric — mirrors the macOS Metric tuple. */
-private data class Metric(
-    val latest: Double?,
-    val typical: Double?,
-    val series: List<Double>,
+// MARK: - 2. Week cards
+
+@Composable
+private fun WeekCard(title: String, trailing: String? = null, content: @Composable () -> Unit) {
+    NoopCard(padding = 18.dp) {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Overline(title, color = Palette.textPrimary, modifier = Modifier.weight(1f))
+                if (trailing != null) Text(trailing, style = NoopType.footnote, color = Palette.textTertiary)
+                Text("›", style = NoopType.headline, color = Palette.textSecondary, modifier = Modifier.padding(start = 8.dp))
+            }
+            content()
+        }
+    }
+}
+
+@Composable
+private fun Legend(items: List<Pair<Color, String>>) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+        items.forEach { (c, label) ->
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 10.dp)) {
+                Box(
+                    Modifier.size(10.dp).drawBehind {
+                        drawCircle(c, style = Stroke(width = 3f))
+                    },
+                )
+                Spacer(Modifier.width(6.dp))
+                Overline(label, color = Palette.textPrimary)
+            }
+        }
+    }
+}
+
+// MARK: - Model
+
+/** Last night, resolved from the daily row + its session. */
+private data class Night(
+    val day: String,
+    val onset: Long,
+    val wake: Long,
+    val asleepMin: Double,
+    val inBedMin: Double,
+    val awakeMin: Double,
+    val lightMin: Double,
+    val deepMin: Double,
+    val remMin: Double,
+    /** Timed stage spans when the on-device stager produced them; null for totals-only nights. */
+    val spans: List<StageSpan>?,
+    val typicalAsleepMin: Double?,
+    /** Per stage: mean ± 1 sd of minutes over the prior 30 nights. */
+    val typicalRange: Map<String, ClosedFloatingPointRange<Double>>,
+) {
+    fun minutesOf(stage: String): Double = when (stage) {
+        "awake" -> awakeMin; "light" -> lightMin; "deep" -> deepMin; "rem" -> remMin; else -> 0.0
+    }
+}
+
+private class Week(
+    val labels: List<DayLabel>,
+    val performancePct: List<Double?>,
+    val hours: List<Double?>,
+    val needHours: List<Double?>,
+    val hoursVsNeedPct: List<Double?>,
+    val deepHours: List<Double?>,
+    val remHours: List<Double?>,
+    val nights: List<Pair<Long, Long>?>,
+    val efficiencyPct: List<Double?>,
+    val respRpm: List<Double?>,
 )
 
-/** Everything the screen renders, derived once per data change. */
-private data class SleepModel(
-    val stages: Stages,
-    val clockLabel: String,
-    val efficiencyText: String,
-    val performance: Metric,
-    val efficiency: Metric,
-    val consistency: Metric,
-    val hoursVsNeeded: Metric,
-    val restorative: Metric,
-    val respiratory: Metric,
-    val sleepDebt: Metric,
-    val typicalTotalMin: Double?,
-    val typicalDeepMin: Double?,
-    val typicalRemMin: Double?,
-    val typicalLightMin: Double?,
-    val trendHours: List<Double>,
-)
+private fun hasStages(d: DailyMetric) = (d.deepMin ?: 0.0) + (d.remMin ?: 0.0) + (d.lightMin ?: 0.0) > 0.0
 
-/**
- * Build the whole model from the cached daily metrics + the latest sleep session. Returns
- * null when there is no usable latest night (no stage minutes), which renders the empty
- * state. All series are computed in one pass-set here, matching the macOS buildModel().
- */
-private fun buildSleepModel(days: List<DailyMetric>, session: SleepSession?): SleepModel? {
-    val latest = days.lastOrNull { (it.deepMin ?: 0.0) + (it.remMin ?: 0.0) + (it.lightMin ?: 0.0) > 0.0 }
-        ?: return null
+/** Awake minutes for a day: implied by efficiency when known, else 6 min per disturbance. */
+private fun awakeMinutes(d: DailyMetric, asleep: Double): Double {
+    val eff = d.efficiency?.let { if (it > 1.0) it / 100.0 else it }
+    return when {
+        eff != null && eff in 0.01..0.999 -> max(0.0, asleep / eff - asleep)
+        d.disturbances != null -> d.disturbances!! * 6.0
+        else -> 0.0
+    }
+}
 
+private fun buildNight(days: List<DailyMetric>, sessions: List<SleepSession>): Night? {
+    val latest = days.lastOrNull(::hasStages) ?: return null
     val deep = latest.deepMin ?: 0.0
     val rem = latest.remMin ?: 0.0
     val light = latest.lightMin ?: 0.0
     val asleep = latest.totalSleepMin ?: (deep + rem + light)
-    // Awake estimate: prefer (time-in-bed − asleep) implied by efficiency; else from
-    // disturbances; matches the macOS "awake minutes" carried in the stagesJSON.
-    val effFrac = latest.efficiency?.let { if (it > 1.0) it / 100.0 else it }
-    val awake = when {
-        effFrac != null && effFrac in 0.01..0.999 -> max(0.0, asleep / effFrac - asleep)
-        latest.disturbances != null -> latest.disturbances!! * 6.0
-        else -> 0.0
-    }
-    val stages = Stages(awake = awake, light = light, deep = deep, rem = rem)
-    if (stages.total <= 0.0) return null
+    val awake = awakeMinutes(latest, asleep)
+    val inBed = asleep + awake
 
-    // Typical = mean across nights with data (mirrors typicalTotalMin / typicalStageMin).
-    val typicalTotalMin = mean(days.mapNotNull { it.totalSleepMin }.filter { it > 0.0 })
-    val typicalDeepMin = mean(days.mapNotNull { it.deepMin }.filter { it > 0.0 })
-    val typicalRemMin = mean(days.mapNotNull { it.remMin }.filter { it > 0.0 })
-    val typicalLightMin = mean(days.mapNotNull { it.lightMin }.filter { it > 0.0 })
+    val session = sessionForDay(sessions, latest.day) ?: latestMainSession(sessions)
+    // Without a session clock, lay the night out as ending at 07:00 on its day so the
+    // chart still has bounds; the trace will simply be empty.
+    val wake = session?.endTs ?: LocalDate.parse(latest.day).atTime(7, 0).atZone(ZoneId.systemDefault()).toEpochSecond()
+    val onset = session?.startTs ?: (wake - (inBed * 60).toLong())
 
-    // Personal sleep need (minutes): mean asleep, floored at 7.5h (450 min).
-    val needMin = max(450.0, typicalTotalMin ?: 450.0)
-
-    // Per-tile metrics — each a full pass over `days`, exactly as the macOS screen.
-    val performance = metric(days) { d ->
-        d.totalSleepMin?.takeIf { it > 0.0 && needMin > 0.0 }?.let { minOf(100.0, it / needMin * 100.0) }
-    }
-    val efficiency = metric(days) { d ->
-        d.efficiency?.let { if (it <= 1.0) it * 100.0 else it }
-    }
-    val consistency = consistencySeries(days)
-    val hoursVsNeeded = metric(days) { d ->
-        d.totalSleepMin?.takeIf { it > 0.0 && needMin > 0.0 }?.let { it / needMin * 100.0 }
-    }
-    val restorative = metric(days) { d ->
-        val dp = d.deepMin; val rm = d.remMin; val sl = d.totalSleepMin
-        if (dp != null && rm != null && sl != null && sl > 0.0) (dp + rm) / sl * 100.0 else null
-    }
-    val respiratory = metric(days) { it.respRateBpm }
-    val sleepDebt = run {
-        val series = days.mapNotNull { d ->
-            d.totalSleepMin?.takeIf { it > 0.0 && needMin > 0.0 }?.let { max(0.0, needMin - it) }
-        }
-        Metric(series.lastOrNull(), mean(series), series)
+    val prior = days.dropLast(1).filter(::hasStages).takeLast(30)
+    fun range(pick: (DailyMetric) -> Double?): ClosedFloatingPointRange<Double>? {
+        val xs = prior.mapNotNull(pick).filter { it > 0.0 }
+        if (xs.size < 3) return null
+        val m = xs.average()
+        val sd = sqrt(xs.sumOf { (it - m) * (it - m) } / xs.size)
+        return (m - sd).coerceAtLeast(0.0)..(m + sd)
     }
 
-    // 14-day asleep-hours trend (falls back to all nights if the window is too sparse).
-    val allHours = days.mapNotNull { it.totalSleepMin?.takeIf { m -> m > 0.0 }?.let { m -> m / 60.0 } }
-    val recentHours = allHours.takeLast(14)
-    val trendHours = if (recentHours.size >= 2) recentHours else allHours
-
-    return SleepModel(
-        stages = stages,
-        clockLabel = clockLabel(latest, session),
-        efficiencyText = efficiency.latest?.let { "${it.roundToInt()}%" } ?: "—",
-        performance = performance,
-        efficiency = efficiency,
-        consistency = consistency,
-        hoursVsNeeded = hoursVsNeeded,
-        restorative = restorative,
-        respiratory = respiratory,
-        sleepDebt = sleepDebt,
-        typicalTotalMin = typicalTotalMin,
-        typicalDeepMin = typicalDeepMin,
-        typicalRemMin = typicalRemMin,
-        typicalLightMin = typicalLightMin,
-        trendHours = trendHours,
+    return Night(
+        day = latest.day,
+        onset = onset, wake = wake,
+        asleepMin = asleep, inBedMin = inBed, awakeMin = awake,
+        lightMin = light, deepMin = deep, remMin = rem,
+        spans = session?.let { parseSpans(it.stagesJSON) },
+        typicalAsleepMin = prior.mapNotNull { it.totalSleepMin }.filter { it > 0.0 }.takeIf { it.isNotEmpty() }?.average(),
+        typicalRange = listOfNotNull(
+            range { d -> d.totalSleepMin?.let { awakeMinutes(d, it) } }?.let { "awake" to it },
+            range { it.lightMin }?.let { "light" to it },
+            range { it.deepMin }?.let { "deep" to it },
+            range { it.remMin }?.let { "rem" to it },
+        ).toMap(),
     )
 }
 
-/** Build a metric from a per-day transform, keeping only finite values. */
-private fun metric(days: List<DailyMetric>, transform: (DailyMetric) -> Double?): Metric {
-    val series = days.mapNotNull(transform).filter { it.isFinite() }
-    return Metric(series.lastOrNull(), mean(series), series)
+private fun buildWeek(
+    days: List<DailyMetric>,
+    sessions: List<SleepSession>,
+    series: Map<String, Map<String, Double>>,
+): Week {
+    val week = days.filter(::hasStages).takeLast(7)
+    val typicalNeed = max(450.0, days.mapNotNull { it.totalSleepMin }.filter { it > 0.0 }.takeIf { it.isNotEmpty() }?.average() ?: 450.0)
+    val needFor = { d: DailyMetric -> series["sleepNeedMin"]?.get(d.day) ?: typicalNeed }
+    val fmt = DateTimeFormatter.ofPattern("EEE", Locale.US)
+
+    return Week(
+        labels = week.map { d ->
+            val date = runCatching { LocalDate.parse(d.day) }.getOrNull()
+            DayLabel(date?.format(fmt) ?: "·", date?.dayOfMonth?.toString() ?: "")
+        },
+        performancePct = week.map { d ->
+            series["sleepPerformancePct"]?.get(d.day)
+                ?: d.totalSleepMin?.let { minOf(100.0, it / needFor(d) * 100.0) }
+        },
+        hours = week.map { it.totalSleepMin?.let { m -> m / 60.0 } },
+        needHours = week.map { needFor(it) / 60.0 },
+        hoursVsNeedPct = week.map { d -> d.totalSleepMin?.let { minOf(100.0, it / needFor(d) * 100.0) } },
+        deepHours = week.map { it.deepMin?.let { m -> m / 60.0 } },
+        remHours = week.map { it.remMin?.let { m -> m / 60.0 } },
+        nights = week.map { d -> sessionForDay(sessions, d.day)?.let { it.startTs to it.endTs } },
+        efficiencyPct = week.map { it.efficiency?.let { e -> if (e <= 1.0) e * 100.0 else e } },
+        respRpm = week.map { it.respRateBpm },
+    )
 }
+
+/** The main (longest) sleep whose wake falls on [day], in the phone's zone. */
+private fun sessionForDay(sessions: List<SleepSession>, day: String): SleepSession? {
+    val zone = ZoneId.systemDefault()
+    return sessions
+        .filter { Instant.ofEpochSecond(it.endTs).atZone(zone).toLocalDate().toString() == day }
+        .maxByOrNull { it.endTs - it.startTs }
+}
+
+/** Most recent session at least 3 h long (skips naps). */
+internal fun latestMainSession(sessions: List<SleepSession>): SleepSession? =
+    sessions.filter { it.endTs - it.startTs >= 3 * 3600 }.maxByOrNull { it.endTs }
 
 /**
- * Consistency per day from the rolling bedtime spread — but Android's daily metrics carry
- * no per-night onset timestamp, so a bedtime-variance score isn't reconstructable from the
- * cached `days` alone. We approximate the same intent (steadier nights → higher score) from
- * the trailing-14 spread of total-sleep duration: low duration variability ≈ a consistent
- * routine. Each day's score uses the window ending at that day, matching the macOS rolling
- * shape. Honest note: this is a duration-based proxy, not the onset-spread score.
+ * Timed spans from a stagesJSON array of `{start, end, stage}` (the on-device stager's
+ * shape). Returns null for the WHOOP-import shape `{stage, min}` or anything unparseable.
  */
-private fun consistencySeries(days: List<DailyMetric>): Metric {
-    val mins = days.mapNotNull { it.totalSleepMin?.takeIf { m -> m > 0.0 } }
-    if (mins.size < 3) return Metric(null, null, emptyList())
-    val scores = ArrayList<Double>()
-    for (i in mins.indices) {
-        val lo = max(0, i - 13)
-        val window = mins.subList(lo, i + 1)
-        if (window.size < 3) continue
-        val m = window.average()
-        val variance = window.sumOf { (it - m) * (it - m) } / window.size
-        val sd = Math.sqrt(variance)
-        // 90 min of duration SD maps to a 0 score; tighter routines climb to 100.
-        scores.add((100.0 * (1.0 - sd / 90.0)).coerceIn(0.0, 100.0))
-    }
-    return Metric(scores.lastOrNull(), mean(scores), scores)
+internal fun parseSpans(json: String?): List<StageSpan>? {
+    if (json.isNullOrBlank()) return null
+    return runCatching {
+        val arr = JSONArray(json)
+        val out = ArrayList<StageSpan>(arr.length())
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            if (!o.has("start") || !o.has("end")) return null
+            val stage = when (o.optString("stage").lowercase()) {
+                "wake", "awake" -> "awake"; "light" -> "light"; "deep", "sws" -> "deep"; "rem" -> "rem"
+                else -> continue
+            }
+            out.add(StageSpan(o.getLong("start"), o.getLong("end"), stage))
+        }
+        out.takeIf { it.isNotEmpty() }
+    }.getOrNull()
 }
 
-private fun mean(vals: List<Double>): Double? = if (vals.isEmpty()) null else vals.sum() / vals.size
+// MARK: - Formatting
 
-// MARK: - Stage segment reconstruction (durations only — same architecture as macOS)
-
-/**
- * Lay the stage minutes end-to-end as proportional hypnogram segments: light → deep →
- * light → rem → light → awake (deep early, REM later, awake last). Weights are minutes;
- * the Hypnogram normalizes them to width.
- */
-private fun stageSegments(s: Stages): List<Pair<String, Float>> {
-    val out = ArrayList<Pair<String, Float>>()
-    fun add(name: String, minutes: Double) {
-        if (minutes > 0.0) out.add(name to minutes.toFloat())
-    }
-    add("light", s.light * 0.4)
-    add("deep", s.deep)
-    add("light", s.light * 0.3)
-    add("rem", s.rem)
-    add("light", s.light * 0.3)
-    add("awake", s.awake)
-    return out
+/** Hours as "h:mm" — 6.27 → "6:16". */
+private fun hm(hours: Double): String {
+    val total = (hours * 60).roundToInt().coerceAtLeast(0)
+    return "${total / 60}:" + String.format(Locale.US, "%02d", total % 60)
 }
-
-// MARK: - Formatting helpers (mirror SleepView.swift)
 
 private fun pct(minutes: Double, total: Double): Int =
     if (total > 0.0) (minutes / total * 100.0).roundToInt() else 0
-
-private fun pctValue(v: Double?): String = v?.let { "${it.roundToInt()}%" } ?: "—"
-
-/** "+12% vs typical" / "−0.4 rpm vs typical" — the latest-vs-mean caption every tile carries. */
-private fun vsTypical(latest: Double?, typical: Double?, suffix: String, decimals: Int = 0): String {
-    if (latest == null || typical == null || typical == 0.0) return "vs typical —"
-    val diff = latest - typical
-    val sign = if (diff >= 0) "+" else "−"
-    val mag = abs(diff)
-    val num = if (decimals == 0) "${mag.roundToInt()}" else String.format(Locale.US, "%.${decimals}f", mag)
-    return "$sign$num$suffix vs typical"
-}
-
-private fun debtCaption(debt: Double?): String {
-    if (debt == null) return "vs need"
-    return if (debt < 15.0) "On target" else "Below need"
-}
-
-private fun debtColor(debt: Double?): Color = when {
-    debt == null -> Palette.textPrimary
-    debt < 15.0 -> Palette.statusPositive
-    debt < 60.0 -> Palette.statusWarning
-    else -> Palette.statusCritical
-}
-
-private fun durationText(minutes: Double): String {
-    val m = max(0, minutes.roundToInt())
-    return if (m < 60) "${m}m" else "${m / 60}h ${m % 60}m"
-}
-
-/** "Wed 4 Jun · 22:50–06:48" style trailing label from the session clock, when available. */
-private fun clockLabel(latest: DailyMetric, session: SleepSession?): String {
-    val timeFmt = SimpleDateFormat("HH:mm", Locale.US)
-    val dateFmt = SimpleDateFormat("EEE d MMM", Locale.US)
-    if (session != null) {
-        val onset = Date(session.startTs * 1000L)
-        val wake = Date(session.endTs * 1000L)
-        return "${dateFmt.format(onset)} · ${timeFmt.format(onset)}–${timeFmt.format(wake)}"
-    }
-    // Fall back to the daily metric's day string (YYYY-MM-DD), formatted to "EEE d MMM".
-    return runCatching {
-        val parser = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
-        parser.parse(latest.day)?.let { dateFmt.format(it) }
-    }.getOrNull() ?: latest.day
-}
-
-/**
- * Best-effort sum of a sleepSession stagesJSON. Android's stagesJSON is a verbatim
- * segments array (not the macOS minutes dict), so this is unused for the primary stage
- * split (which comes from the daily metric) but kept available for an onset-aware future.
- * Tolerant of both an object {light,deep,rem,awake} (minutes) and an array of segments.
- */
-@Suppress("unused")
-private fun parseStagesJson(json: String?): Stages? {
-    if (json.isNullOrBlank()) return null
-    return runCatching {
-        val trimmed = json.trim()
-        if (trimmed.startsWith("{")) {
-            val o = JSONObject(trimmed)
-            Stages(
-                awake = o.optDouble("awake", 0.0),
-                light = o.optDouble("light", 0.0),
-                deep = o.optDouble("deep", 0.0),
-                rem = o.optDouble("rem", 0.0),
-            ).takeIf { it.total > 0.0 }
-        } else if (trimmed.startsWith("[")) {
-            val arr = JSONArray(trimmed)
-            var a = 0.0; var l = 0.0; var d = 0.0; var r = 0.0
-            for (i in 0 until arr.length()) {
-                val seg = arr.optJSONObject(i) ?: continue
-                val stage = seg.optString("stage", seg.optString("type", "")).lowercase()
-                val durMin = (seg.optDouble("durationMin", Double.NaN)).let {
-                    if (it.isNaN()) seg.optDouble("duration", 0.0) / 60.0 else it
-                }
-                when (stage) {
-                    "awake", "wake" -> a += durMin
-                    "light" -> l += durMin
-                    "deep", "sws" -> d += durMin
-                    "rem" -> r += durMin
-                }
-            }
-            Stages(a, l, d, r).takeIf { it.total > 0.0 }
-        } else {
-            null
-        }
-    }.getOrNull()
-}
