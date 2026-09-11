@@ -26,7 +26,6 @@ import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
-// (rememberTextMeasurer is used by the week charts below)
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -261,6 +260,10 @@ private fun DrawScope.drawGrid(rows: Int = 4) {
     }
 }
 
+/** Vertical room to reserve above a full-height bar so its printed value never overlaps it. */
+private fun labelReserve(m: TextMeasurer): Float =
+    m.measure("100%", TextStyle(fontSize = 12.sp)).size.height + 10f
+
 private fun DrawScope.label(
     m: TextMeasurer, text: String, x: Float, y: Float, color: Color, fontSp: Float = 12f, above: Boolean = true,
 ) {
@@ -288,7 +291,7 @@ internal fun WeekBarChart(
         val n = values.size
         if (n == 0) return@Canvas
         drawTodayPill(n)
-        val top = 22f
+        val top = labelReserve(m)
         val plotH = size.height - top
         val scale = (max ?: values.filterNotNull().maxOrNull() ?: 1.0).coerceAtLeast(1e-6)
         val slot = size.width / n
@@ -350,7 +353,7 @@ internal fun WeekDualLineChart(
                 val p = Offset(x(i), y(v))
                 drawCircle(Palette.surfaceRaised, radius = 8f, center = p)
                 drawCircle(c, radius = 8f, center = p, style = Stroke(width = 4f))
-                label(m, format(v), p.x, if (above) p.y - 10f else p.y + 10f, c, above = above)
+                label(m, format(v), p.x, if (above) p.y - 14f else p.y + 14f, c, above = above)
             }
         }
         series(a, aColor, above = true)
@@ -374,7 +377,7 @@ internal fun WeekStackedBarChart(
         drawTodayPill(n)
         val totals = (0 until n).map { i -> parts.mapNotNull { it[i] }.takeIf { it.isNotEmpty() }?.sum() }
         val scale = (totals.filterNotNull().maxOrNull() ?: 1.0).coerceAtLeast(1e-6)
-        val top = 22f
+        val top = labelReserve(m)
         val plotH = size.height - top
         val slot = size.width / n
         val bw = slot * 0.36f
