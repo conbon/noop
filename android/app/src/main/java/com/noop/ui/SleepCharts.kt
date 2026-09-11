@@ -44,7 +44,7 @@ internal data class DayLabel(val weekday: String, val dayOfMonth: String)
 
 internal val DASH = PathEffect.dashPathEffect(floatArrayOf(6f, 7f))
 
-internal fun stageColor(stage: String): Color = when (stage) {
+internal fun sleepStageColor(stage: String): Color = when (stage) {
     "awake" -> Palette.sleepAwake
     "light" -> Palette.sleepLight
     "deep" -> Palette.sleepDeep
@@ -76,7 +76,7 @@ internal fun NightChart(
 ) {
     val ticks = listOf(130, 110, 90, 70, 50, 30)
     val measurer = rememberTextMeasurer()
-    val color = stageColor(selectedStage)
+    val color = sleepStageColor(selectedStage)
 
     Column(modifier = modifier) {
         Row(modifier = Modifier.fillMaxWidth().height(230.dp)) {
@@ -177,7 +177,7 @@ internal fun StageStrip(
     selected: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val fill = if (selected) stageColor(stage) else Palette.sleepAwake.copy(alpha = 0.85f)
+    val fill = if (selected) sleepStageColor(stage) else Palette.sleepAwake.copy(alpha = 0.85f)
     Canvas(modifier = modifier.fillMaxWidth().height(22.dp)) {
         val r = CornerRadius(5f, 5f)
         // Track + diagonal hatching.
@@ -253,9 +253,9 @@ private fun DrawScope.drawGrid(rows: Int = 4) {
 }
 
 private fun DrawScope.label(
-    m: TextMeasurer, text: String, x: Float, y: Float, color: Color, size: Float = 12f, above: Boolean = true,
+    m: TextMeasurer, text: String, x: Float, y: Float, color: Color, fontSp: Float = 12f, above: Boolean = true,
 ) {
-    val style = TextStyle(fontSize = size.sp, color = color, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+    val style = TextStyle(fontSize = fontSp.sp, color = color, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
     val r = m.measure(text, style)
     val top = if (above) y - r.size.height - 4f else y + 4f
     drawText(r, topLeft = Offset(x - r.size.width / 2f, top.coerceIn(0f, size.height - r.size.height)))

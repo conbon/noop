@@ -243,7 +243,7 @@ private fun StageRow(
     selected: Boolean,
     onSelect: () -> Unit,
 ) {
-    val color = stageColor(stage)
+    val color = sleepStageColor(stage)
     Column(
         modifier = Modifier
             .fillMaxWidth()
