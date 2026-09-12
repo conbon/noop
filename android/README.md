@@ -119,7 +119,7 @@ android/
             └── ui/              # NoopTheme, MainActivity, AppViewModel, screens, NavHost
 ```
 
-Root package: `com.noop` · application id: `com.noop.whoop` (debug builds append `.debug`).
+Root package: `com.noop` · application id: `com.noop.conal` (this fork; renamed so it installs beside other NOOP builds) (debug builds append `.debug`).
 
 ---
 
