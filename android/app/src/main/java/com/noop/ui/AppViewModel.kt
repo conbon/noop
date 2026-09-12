@@ -13,6 +13,9 @@ import com.noop.data.DailyMetric
 import com.noop.data.WhoopDatabase
 import com.noop.data.WhoopRepository
 import com.noop.protocol.CommandNumber
+import com.noop.protocol.DeviceFamily
+import com.noop.protocol.EcgSession
+import com.noop.protocol.Whoop5Variant
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -160,6 +163,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Fire a haptic buzz on the strap (requires a bonded connection). */
     fun buzz(loops: Int = 2) = ble.buzz(loops)
+
+    // MARK: - ECG test bed (WHOOP MG "Labrador"; 5/MG link only)
+
+    /** Which wire protocol the current link speaks (4.0 verified path vs 5/MG test bed). */
+    val linkFamily: StateFlow<DeviceFamily> = ble.familyFlow
+
+    /** MG vs plain 5.0, from the strap's Device Information Service. */
+    val strapVariant: StateFlow<Whoop5Variant> = ble.variant
+
+    /** The armed / last ECG recording, or null when none. */
+    val ecg: StateFlow<EcgSession.Snapshot?> = ble.ecg
+
+    fun startEcg(): Boolean = ble.startEcg()
+    fun stopEcg() = ble.stopEcg()
+    fun clearEcg() = ble.clearEcg()
 
     override fun onCleared() {
         super.onCleared()

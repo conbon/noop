@@ -24,6 +24,12 @@ translated from that verified implementation; they are not invented here.
 > process's logcat — share it to debug against real hardware. **Settings → Import WHOOP
 > data** takes the app.whoop.com export zip (or a single CSV from it).
 
+> **WHOOP 5.0 / MG test bed:** this fork (`noop-conal`) speaks the 5/MG wire protocol too —
+> CLIENT_HELLO bond, `fd4b` notifies, puffin command frames — and has an **ECG** screen (Live → ECG)
+> that runs the WHOOP MG "Labrador" turn-on sequence and plots the filtered stream. None of it has
+> met a real MG yet; `docs/ECG_RESEARCH.md` has the findings, the test plan and the HCI-snoop
+> triage tool (`Tools/whoop-capture/ecg_triage.py`).
+
 In particular, **the BLE layer must be validated on real hardware** — a phone with
 Bluetooth and an actual WHOOP strap. The bond trick (one confirmed write to the command
 characteristic), the realtime HR stream, the historical (type-47) offload, and the haptic
@@ -154,7 +160,7 @@ and are the source of truth for the BLE layer:
 | → command notify char | `61080003-…` (responses) |
 | → event notify char | `61080004-…` (events) |
 | → data notify char | `61080005-…` (fragmented data) |
-| WHOOP 5 custom service | `fd4b0001-cce1-4033-93ce-002d5875f58a` |
+| WHOOP 5 / MG custom service | `fd4b0001-cce1-4033-93ce-002d5875f58a` (write `fd4b0002`, notify `fd4b0003/4/5/7`; CRC16-Modbus header, inner record at offset 8; bond = confirmed write of the static CLIENT_HELLO) |
 | Standard HR service / char | `0x180D` / `0x2A37` (HR + R-R, works **unbonded**) |
 | Battery service / char | `0x180F` / `0x2A19` (percent) |
 | **Bond** | exactly **one confirmed (`writeWithResponse`) write** to the command characteristic — the reference uses `GET_BATTERY_LEVEL`. Its completion callback = bonded. |

@@ -41,8 +41,14 @@ private fun ByteArray.u32(off: Int): Long? {
  * A complete frame is `length + 4` bytes where `length` = u16 LE at buf[1..3]. Leading bytes before
  * the 0xAA SOF are discarded. Mirrors framing.py / Swift `Reassembler`.
  */
-class Reassembler {
+class Reassembler(
+    /** Envelope rules to apply: 4.0 (len@1..2, +4) or 5.0/MG puffin (declLen@2..3, +8). */
+    var family: DeviceFamily = DeviceFamily.WHOOP4,
+) {
     private val buf = ArrayList<Byte>()
+
+    /** Drop any partial frame — call when the link (and so the fragment stream) restarts. */
+    fun clear() = buf.clear()
 
     /** Feed one fragment; return zero or more complete frames now available, in order. */
     fun feed(fragment: ByteArray): List<ByteArray> {
@@ -59,8 +65,16 @@ class Reassembler {
                 repeat(sof) { buf.removeAt(0) }
             }
             if (buf.size < 4) break
-            val length = (buf[1].toInt() and 0xFF) or ((buf[2].toInt() and 0xFF) shl 8)
-            val total = length + 4
+            val total = when (family) {
+                DeviceFamily.WHOOP4 -> ((buf[1].toInt() and 0xFF) or ((buf[2].toInt() and 0xFF) shl 8)) + 4
+                DeviceFamily.WHOOP5 -> ((buf[2].toInt() and 0xFF) or ((buf[3].toInt() and 0xFF) shl 8)) + 8
+            }
+            // A corrupt SOF can declare an absurd length; drop one byte and resync rather than
+            // waiting forever for bytes that will never come.
+            if (total <= 0 || total > 4096) {
+                buf.removeAt(0)
+                continue
+            }
             if (buf.size < total) break
             val frame = ByteArray(total) { buf[it] }
             out.add(frame)
@@ -320,6 +334,58 @@ object Framing {
         frame[i++] = ((trailer ushr 8) and 0xFFL).toByte()
         frame[i++] = ((trailer ushr 16) and 0xFFL).toByte()
         frame[i] = ((trailer ushr 24) and 0xFFL).toByte()
+        return frame
+    }
+
+    /**
+     * Build a WHOOP 5.0/MG ("puffin") command frame in the CRC16 envelope.
+     *
+     *   inner   = [type][seq][cmd] + payload, padded to a 4-byte boundary (the strap's maverick
+     *             framing pads; the 12-byte haptics body needs it, 4-aligned bodies are unaffected)
+     *   declLen = inner.size + 4 (the CRC32 tail)
+     *   frame   = [0xAA, 0x01, declLen LE(2), header(2)] + crc16Modbus(frame[0..6)) LE(2)
+     *           + inner + crc32(inner) LE(4)
+     *
+     * `type` defaults to 35 (COMMAND) and `header` to `[0x00, 0x01]`, the shape of the one puffin
+     * frame a real strap is known to accept (the static CLIENT_HELLO). Round-trips through
+     * `parseFrame(frame, WHOOP5)`.
+     */
+    fun puffinCommandFrame(
+        cmd: Int,
+        seq: Int,
+        payload: ByteArray = byteArrayOf(0x00),
+        type: Int = PacketType.COMMAND.rawValue,
+        header: ByteArray = byteArrayOf(0x00, 0x01),
+    ): ByteArray {
+        val inner0 = ByteArray(3 + payload.size)
+        inner0[0] = (type and 0xFF).toByte()
+        inner0[1] = (seq and 0xFF).toByte()
+        inner0[2] = (cmd and 0xFF).toByte()
+        System.arraycopy(payload, 0, inner0, 3, payload.size)
+        val pad = (4 - inner0.size % 4) % 4
+        val inner = if (pad == 0) inner0 else inner0 + ByteArray(pad)
+
+        val declLen = inner.size + 4
+        val head = ByteArray(6)
+        head[0] = 0xAA.toByte()
+        head[1] = 0x01
+        head[2] = (declLen and 0xFF).toByte()
+        head[3] = ((declLen ushr 8) and 0xFF).toByte()
+        head[4] = header[0]
+        head[5] = header[1]
+        val c16 = Crc.crc16Modbus(head)
+        val c32 = Crc.crc32(inner)
+
+        val frame = ByteArray(6 + 2 + inner.size + 4)
+        var i = 0
+        System.arraycopy(head, 0, frame, i, 6); i += 6
+        frame[i++] = (c16 and 0xFF).toByte()
+        frame[i++] = ((c16 ushr 8) and 0xFF).toByte()
+        System.arraycopy(inner, 0, frame, i, inner.size); i += inner.size
+        frame[i++] = (c32 and 0xFFL).toByte()
+        frame[i++] = ((c32 ushr 8) and 0xFFL).toByte()
+        frame[i++] = ((c32 ushr 16) and 0xFFL).toByte()
+        frame[i] = ((c32 ushr 24) and 0xFFL).toByte()
         return frame
     }
 }

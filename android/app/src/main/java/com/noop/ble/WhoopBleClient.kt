@@ -24,11 +24,18 @@ import com.noop.data.RrRow
 import com.noop.data.StreamBatch
 import com.noop.data.StreamPersistence
 import com.noop.data.WhoopRepository
+import android.content.BroadcastReceiver
+import android.content.Intent
+import android.content.IntentFilter
 import com.noop.protocol.CommandNumber
 import com.noop.protocol.DeviceFamily
+import com.noop.protocol.EcgSession
 import com.noop.protocol.Framing
 import com.noop.protocol.Reassembler
 import com.noop.protocol.Streams
+import com.noop.protocol.Whoop5Ecg
+import com.noop.protocol.Whoop5EcgProbe
+import com.noop.protocol.Whoop5Variant
 import com.noop.protocol.extractStreams
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -133,6 +140,20 @@ class WhoopBleClient(
         private val DATA_NOTIFY_CHAR: UUID = UUID.fromString("61080005-8d6d-82b8-614a-1c8cb0f8dcc6")  // data (fragmented)
 
         val WHOOP5_SERVICE: UUID = UUID.fromString("fd4b0001-cce1-4033-93ce-002d5875f58a")
+        // WHOOP 5.0 / MG characteristics (same roles as the 4.0 layout, plus a fifth notify char).
+        // From the protocol module's DeviceFamily.WHOOP5 table (community reverse-engineering; this
+        // fork is the hardware test bed that will confirm or correct them).
+        private val W5_CMD_WRITE_CHAR: UUID = UUID.fromString("fd4b0002-cce1-4033-93ce-002d5875f58a")
+        private val W5_CMD_NOTIFY_CHAR: UUID = UUID.fromString("fd4b0003-cce1-4033-93ce-002d5875f58a")
+        private val W5_EVENT_NOTIFY_CHAR: UUID = UUID.fromString("fd4b0004-cce1-4033-93ce-002d5875f58a")
+        private val W5_DATA_NOTIFY_CHAR: UUID = UUID.fromString("fd4b0005-cce1-4033-93ce-002d5875f58a")
+        private val W5_AUX_NOTIFY_CHAR: UUID = UUID.fromString("fd4b0007-cce1-4033-93ce-002d5875f58a")
+
+        // Standard Device Information Service — read unbonded; tells an MG from a plain 5.0.
+        private val DIS_SERVICE: UUID = UUID.fromString("0000180a-0000-1000-8000-00805f9b34fb")
+        private val DIS_MODEL_NUMBER: UUID = UUID.fromString("00002a24-0000-1000-8000-00805f9b34fb")
+        private val DIS_SERIAL_NUMBER: UUID = UUID.fromString("00002a25-0000-1000-8000-00805f9b34fb")
+        private val DIS_HARDWARE_REVISION: UUID = UUID.fromString("00002a27-0000-1000-8000-00805f9b34fb")
 
         // Standard BLE profiles. HR + R-R works UNBONDED; battery is a plain %.
         private val HEART_RATE_SERVICE: UUID = UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb")
@@ -180,6 +201,23 @@ class WhoopBleClient(
         }
 
         /**
+         * Packet type byte of a complete frame for [family]: 4.0 carries it at [4] (after
+         * SOF/len/len/crc8), 5.0/MG at [8] (after SOF/hdr/len/len/xx/xx/crc16). Null when too short.
+         */
+        fun frameType(frame: ByteArray, family: DeviceFamily): Int? {
+            val off = if (family == DeviceFamily.WHOOP5) 8 else 4
+            return if (frame.size > off) frame[off].toInt() and 0xFF else null
+        }
+
+        /** Command opcode of a 5/MG COMMAND_RESPONSE (inner [type, seq, cmd, …] starts at 8). */
+        private const val W5_RESPONSE_CMD_OFFSET = 10
+
+        /** How many frames of each type get hex-logged per connection (test-bed visibility). */
+        private const val HEX_LOG_PER_TYPE = 3
+        /** ECG UI refresh cadence and wall-clock tick. */
+        private const val ECG_TICK_MS = 250L
+
+        /**
          * Newest plausible-unix marker in a GET_DATA_RANGE response = the strap's newest stored
          * record. Mirrors Swift `BLEManager.dataRangeNewestUnix`: scan u32 LE words in the response
          * body (starts at frame[7], after [type,seq,cmd]), keep those in the unix range, return max.
@@ -215,6 +253,51 @@ class WhoopBleClient(
 
     /** Frame reassembler for the fragmented custom notify chars (port of Reassembler). */
     private val reassembler = Reassembler()
+
+    /**
+     * Which wire protocol this connection speaks, decided by the custom service the strap exposes.
+     * 4.0 is the verified path; 5/MG is the test-bed path (CLIENT_HELLO bond, puffin frames).
+     */
+    private var family: DeviceFamily = DeviceFamily.WHOOP4
+    private val _family = MutableStateFlow(DeviceFamily.WHOOP4)
+    val familyFlow: StateFlow<DeviceFamily> = _family.asStateFlow()
+
+    /** MG vs plain 5.0, from the Device Information Service; UNKNOWN until read. */
+    private val _variant = MutableStateFlow(Whoop5Variant.UNKNOWN)
+    val variant: StateFlow<Whoop5Variant> = _variant.asStateFlow()
+    private var disModel: String? = null
+    private var disSerial: String? = null
+    private var disHardware: String? = null
+    private var disReadsStarted = false
+
+    /** Characteristic-read queue (reads are one-at-a-time GATT operations too). */
+    private val readQueue = ConcurrentLinkedQueue<BluetoothGattCharacteristic>()
+    private var readInFlight = false
+
+    /** Per-connection frame-type histogram + hex-logged count, for the diagnostic log. */
+    private val frameTypeCounts = HashMap<Int, Int>()
+    private val hexLogged = HashMap<Int, Int>()
+    private var framesSeen = 0
+    private var w5PersistenceNoted = false
+
+    /** The armed ECG recording (5/MG only) and its published snapshot. */
+    private var ecgSession: EcgSession? = null
+    private val _ecg = MutableStateFlow<EcgSession.Snapshot?>(null)
+    val ecg: StateFlow<EcgSession.Snapshot?> = _ecg.asStateFlow()
+    private val ecgTickRunnable = Runnable { ecgTick() }
+    private var ecgPublishPending = false
+    private var ecgStopSent = false
+
+    /** OS pairing progress, logged only — the 5/MG hello is what triggers just-works bonding. */
+    private var bondReceiverRegistered = false
+    private val bondReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context?, intent: Intent?) {
+            if (intent?.action != BluetoothDevice.ACTION_BOND_STATE_CHANGED) return
+            val st = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)
+            val prev = intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, -1)
+            log("OS bond state ${bondStateName(prev)} → ${bondStateName(st)}")
+        }
+    }
 
     /** Rolling command sequence byte; `seq = seq &+ 1` before each send (Swift `seq: UInt8`). */
     private var seq: Int = 0
@@ -375,9 +458,133 @@ class WhoopBleClient(
             return
         }
         seq = (seq + 1) and 0xFF
-        val frame = Framing.buildCommand(cmd, payload, seq)
+        val frame = when (family) {
+            DeviceFamily.WHOOP4 -> Framing.buildCommand(cmd, payload, seq)
+            DeviceFamily.WHOOP5 -> Framing.puffinCommandFrame(cmd.rawValue, seq, payload)
+        }
         enqueueWrite(PendingWrite(frame, withResponse))
-        log("→ ${cmd.name} payload=${payload.toHex()}")
+        log("→ ${cmd.name} payload=${payload.toHex()}" + if (family == DeviceFamily.WHOOP5) " frame=${frame.toHex()}" else "")
+    }
+
+    // ====================================================================================
+    // MARK: ECG (WHOOP MG "Labrador") — hardware test bed
+    // ====================================================================================
+
+    /**
+     * Arm an ECG recording and ask the strap to stream filtered ECG. Turn-on order attested on one
+     * MG: TOGGLE_LABRADOR_FILTERED(139)=1 first (opens the type-43 stream), then
+     * TOGGLE_LABRADOR_DATA_GENERATION(124)=2 (START). Both with response so the result codes land
+     * in the session's probe steps. Returns false (and logs why) when the link cannot carry it.
+     */
+    fun startEcg(): Boolean {
+        if (gatt == null || cmdCharacteristic == null || !didBond) {
+            log("ECG: start ignored — not bonded")
+            return false
+        }
+        if (family != DeviceFamily.WHOOP5) {
+            log("ECG: start ignored — Labrador commands are puffin (5/MG) frames; this link is ${family.name}")
+            return false
+        }
+        ecgSession?.let { if (!it.isFinished) { log("ECG: already recording"); return true } }
+        handler.removeCallbacks(ecgTickRunnable)
+        val session = EcgSession(startedAtMs = System.currentTimeMillis())
+        ecgSession = session
+        ecgStopSent = false
+        log("ECG: START — variant=${_variant.value.label} model=$disModel serial=$disSerial hw=$disHardware")
+        labrador(session, Whoop5Ecg.TOGGLE_REALTIME_FILTERED_ECG_CMD, 1)
+        labrador(session, Whoop5Ecg.MAIN_CONTROL_ECG_DATA_GENERATION_CMD, Whoop5Ecg.ControlSignal.START.raw)
+        publishEcg(force = true)
+        handler.postDelayed(ecgTickRunnable, ECG_TICK_MS)
+        return true
+    }
+
+    /** Stop generation (124=1) and close the stream (139=0), then finish the session. */
+    fun stopEcg(reason: String = "stopped by user") {
+        val session = ecgSession ?: return
+        sendEcgStopCommands(session)
+        session.finish(reason)
+        handler.removeCallbacks(ecgTickRunnable)
+        publishEcg(force = true)
+        log("ECG: STOP — $reason; ${session.snapshot().let { "${it.packets} pkts, ${it.samples.size} samples" }}")
+    }
+
+    /** Forget the last recording (does not touch the strap). */
+    fun clearEcg() {
+        if (ecgSession?.isFinished == false) stopEcg("cleared")
+        ecgSession = null
+        _ecg.value = null
+    }
+
+    private fun labrador(session: EcgSession, cmd: Int, arg: Int) {
+        val number = CommandNumber.fromRaw(cmd)
+        if (number == null) {
+            log("ECG: opcode $cmd missing from CommandNumber; not sent")
+            return
+        }
+        session.commandSent(cmd, arg)
+        send(number, Whoop5Ecg.commandPayload(arg).map { it.toByte() }.toByteArray(), withResponse = true)
+    }
+
+    private fun sendEcgStopCommands(session: EcgSession) {
+        if (ecgStopSent) return
+        ecgStopSent = true
+        if (gatt == null || cmdCharacteristic == null || family != DeviceFamily.WHOOP5) return
+        labrador(session, Whoop5Ecg.MAIN_CONTROL_ECG_DATA_GENERATION_CMD, Whoop5Ecg.ControlSignal.STOP.raw)
+        labrador(session, Whoop5Ecg.TOGGLE_REALTIME_FILTERED_ECG_CMD, 0)
+    }
+
+    private fun ecgTick() {
+        val session = ecgSession ?: return
+        if (session.tick(System.currentTimeMillis())) {
+            sendEcgStopCommands(session)
+            log("ECG: finished by tick — ${session.snapshot().finishReason}")
+        }
+        publishEcg(force = true)
+        if (!session.isFinished) handler.postDelayed(ecgTickRunnable, ECG_TICK_MS)
+    }
+
+    /** Snapshotting copies the sample list, so coalesce per-frame updates onto the tick cadence. */
+    private fun publishEcg(force: Boolean) {
+        val session = ecgSession ?: return
+        if (force) {
+            ecgPublishPending = false
+            _ecg.value = session.snapshot()
+            return
+        }
+        if (ecgPublishPending) return
+        ecgPublishPending = true
+        handler.postDelayed({
+            ecgPublishPending = false
+            ecgSession?.let { _ecg.value = it.snapshot() }
+        }, ECG_TICK_MS)
+    }
+
+    /** Route one complete 5/MG frame into the ECG machinery (type 43 samples, Labrador acks). */
+    private fun routeEcgFrame(frame: ByteArray, type: Int) {
+        val session = ecgSession ?: return
+        when (type) {
+            43 -> {
+                if (session.isFinished) return
+                val ok = session.feed(frame, System.currentTimeMillis())
+                if (ok && session.isFinished) {
+                    sendEcgStopCommands(session)
+                    log("ECG: strap reported the check complete")
+                    handler.removeCallbacks(ecgTickRunnable)
+                    publishEcg(force = true)
+                } else {
+                    publishEcg(force = false)
+                }
+            }
+            36, 38 -> {
+                if (frame.size <= Whoop5EcgProbe.RESULT_CODE_OFFSET) return
+                val cmd = frame[W5_RESPONSE_CMD_OFFSET].toInt() and 0xFF
+                if (!Whoop5Ecg.isLabradorCommand(cmd)) return
+                val outcome = Whoop5EcgProbe.outcome(frame) ?: return
+                session.commandAnswered(cmd, outcome)
+                log("ECG: ${Whoop5Ecg.commandName(cmd)} → ${outcome.token} (${frame.toHex()})")
+                publishEcg(force = true)
+            }
+        }
     }
 
     /**
@@ -429,6 +636,10 @@ class WhoopBleClient(
     private fun connectToDevice(device: BluetoothDevice) {
         // Reset per-connection state (mirrors the Swift flags cleared on connect/disconnect).
         reset()
+        // Nothing is in flight yet, so this is the one safe moment to drop reassembler remnants
+        // (the family may change between connections — a 4.0 today, an MG tomorrow).
+        reassembler.clear()
+        registerBondReceiver()
         // autoConnect = false for a fast, direct connect (CoreBluetooth central.connect default).
         // TRANSPORT_LE pins the connection to BLE on dual-mode devices.
         gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -469,8 +680,27 @@ class WhoopBleClient(
             // Port of didDiscoverServices → didDiscoverCharacteristicsFor, collapsed: Android
             // delivers ALL services+characteristics in one callback, so we walk them directly.
 
+            // 0. WHOOP 5.0 / MG: a different wire protocol. Bond with the static CLIENT_HELLO
+            //    (one confirmed write, like the 4.0 trick) and keep the link QUIET until it is
+            //    acked — pairing may be running underneath. Notify subscriptions, DIS reads and
+            //    the first command follow from onCharacteristicWrite → beginWhoop5Session.
+            val w5 = g.getService(WHOOP5_SERVICE)
+            if (w5 != null) {
+                setFamily(DeviceFamily.WHOOP5)
+                val ch = w5.getCharacteristic(W5_CMD_WRITE_CHAR)
+                cmdCharacteristic = ch
+                if (ch == null) {
+                    log("5/MG service found but fd4b0002 missing; characteristics: ${w5.characteristics.map { it.uuid }}")
+                    return
+                }
+                log("5/MG service found; chars=${w5.characteristics.map { it.uuid.toString().substring(0, 8) }}")
+                writeHelloFrame(g, ch)
+                return
+            }
+            setFamily(DeviceFamily.WHOOP4)
+
             // 1. Custom service: capture the cmd-write char, FIRE THE BOND, queue the notify subs.
-            val custom = g.getService(WHOOP4_SERVICE) ?: g.getService(WHOOP5_SERVICE)
+            val custom = g.getService(WHOOP4_SERVICE)
             if (custom != null) {
                 cmdCharacteristic = custom.getCharacteristic(CMD_WRITE_CHAR)
 
@@ -505,19 +735,23 @@ class WhoopBleClient(
         ) {
             // Port of didWriteValueFor: a CONFIRMED-write completion (no error) == bonding succeeded.
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                log("Confirmed write failed: status=$status")
+                log("Confirmed write failed: status=$status" +
+                    if (!didBond) " (the bond/hello write; 5=insufficient auth, 15=insufficient encryption, 133=stack)" else "")
             } else if (!didBond) {
                 didBond = true
                 _state.value = _state.value.copy(bonded = true)
-                log("BONDED (confirmed write acknowledged) — custom channels should now flow")
+                log("BONDED (confirmed write acknowledged) — ${family.name} custom channels should now flow")
             }
 
             // Run the connect handshake EXACTLY ONCE per connection. didWriteValueFor / onCharacteristicWrite
             // re-fires on EVERY with-response write (the bond write, etc.); the guard prevents re-blasting
             // the handshake at the strap mid-session — THE iOS "won't serve" root cause from the Swift notes.
-            if (!connectHandshakeDone) {
+            if (!connectHandshakeDone && status == BluetoothGatt.GATT_SUCCESS) {
                 connectHandshakeDone = true
-                runConnectHandshake()
+                when (family) {
+                    DeviceFamily.WHOOP4 -> runConnectHandshake()
+                    DeviceFamily.WHOOP5 -> beginWhoop5Session(g)
+                }
             }
 
             // This with-response write is done; release the in-flight slot and send the next.
@@ -538,6 +772,30 @@ class WhoopBleClient(
             // This CCCD write is done; enable the next characteristic's notifications.
             cccdInFlight = false
             drainCccdQueue(g)
+            if (family == DeviceFamily.WHOOP5 && !cccdInFlight && cccdQueue.isEmpty() && !disReadsStarted) {
+                startDisReads(g)
+            }
+        }
+
+        // Android 13+ delivers the read value as a parameter; older APIs read it off the characteristic.
+        override fun onCharacteristicRead(
+            g: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray,
+            status: Int,
+        ) {
+            onRead(g, characteristic.uuid, if (status == BluetoothGatt.GATT_SUCCESS) value else null, status)
+        }
+
+        @Deprecated("Deprecated in API 33; retained for API 26..32")
+        override fun onCharacteristicRead(
+            g: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            status: Int,
+        ) {
+            @Suppress("DEPRECATION")
+            val value = characteristic.value
+            onRead(g, characteristic.uuid, if (status == BluetoothGatt.GATT_SUCCESS) value else null, status)
         }
 
         // Android 13+ delivers the value as a parameter; older APIs read it off the characteristic.
@@ -570,10 +828,25 @@ class WhoopBleClient(
             BATTERY_CHAR -> bytes.firstOrNull()?.let {              // 0x2A19 = percent
                 setBattery((it.toInt() and 0xFF).toDouble())
             }
+            W5_CMD_NOTIFY_CHAR, W5_EVENT_NOTIFY_CHAR, W5_DATA_NOTIFY_CHAR, W5_AUX_NOTIFY_CHAR -> {
+                // 5/MG: same reassembly (family-aware lengths), then UI routing + the ECG machinery.
+                // No Room persistence here yet: the 4.0 stream decoders do not apply to puffin frames.
+                for (frame in reassembler.feed(bytes)) {
+                    val type = frameType(frame, DeviceFamily.WHOOP5) ?: continue
+                    noteFrame(frame, type)
+                    handleFrame(frame)
+                    routeEcgFrame(frame, type)
+                }
+                if (!w5PersistenceNoted) {
+                    w5PersistenceNoted = true
+                    log("5/MG frames flowing; live/historical persistence is 4.0-only and skipped on this link")
+                }
+            }
             CMD_NOTIFY_CHAR, EVENT_NOTIFY_CHAR, DATA_NOTIFY_CHAR -> {
                 // Reassemble (no-op for already-complete frames) then route each complete frame.
                 // Port of: for frame in reassembler.feed(bytes) { router.handle(frame:) }.
                 for (frame in reassembler.feed(bytes)) {
+                    frameType(frame, DeviceFamily.WHOOP4)?.let { noteFrame(frame, it) }
                     handleFrame(frame)              // UI (always) — port of router.handle(frame:)
 
                     // Capture the strap's newest stored record from a GET_DATA_RANGE reply
@@ -607,7 +880,7 @@ class WhoopBleClient(
      * Direct port of `FrameRouter.handle(frame:)`.
      */
     private fun handleFrame(frame: ByteArray) {
-        val parsed = Framing.parseFrame(frame, DeviceFamily.WHOOP4)
+        val parsed = Framing.parseFrame(frame, family)
         if (!parsed.ok) return
         // Reject frames that failed their checksum — never let bad bytes drive state.
         if (parsed.crcOk == false) return
@@ -756,6 +1029,160 @@ class WhoopBleClient(
             ((now shr 24) and 0xFF).toByte(),
             0, 0, 0, 0,
         )
+    }
+
+    // ====================================================================================
+    // MARK: WHOOP 5.0 / MG session (test bed — not yet hardware-verified in this fork)
+    // ====================================================================================
+
+    private fun setFamily(f: DeviceFamily) {
+        if (family != f) log("Link family: ${f.name}")
+        family = f
+        _family.value = f
+        reassembler.family = f
+    }
+
+    /**
+     * The 5/MG bond: one confirmed write of the static 16-byte CLIENT_HELLO to fd4b0002. Written
+     * inline (not via the queue) so it is unambiguously the first thing on the link, like the 4.0
+     * GET_BATTERY_LEVEL bond write. The strap answers on fd4b0003 once notifications are on.
+     */
+    @SuppressLint("MissingPermission")
+    private fun writeHelloFrame(g: BluetoothGatt, ch: BluetoothGattCharacteristic) {
+        val hello = DeviceFamily.WHOOP5.clientHello ?: return
+        log("Bonding (5/MG): confirmed write CLIENT_HELLO ${hello.toHex()} to fd4b0002")
+        writeInFlight = true
+        val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeCharacteristic(ch, hello, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) ==
+                BluetoothGatt.GATT_SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            run {
+                ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                ch.value = hello
+                g.writeCharacteristic(ch)
+            }
+        }
+        if (!ok) {
+            writeInFlight = false
+            log("Hello write rejected by stack")
+        }
+    }
+
+    /** Hello acked: now subscribe to the four fd4b notify chars plus standard HR/battery. */
+    private fun beginWhoop5Session(g: BluetoothGatt) {
+        val w5 = g.getService(WHOOP5_SERVICE)
+        if (w5 == null) {
+            log("5/MG service vanished after hello ack")
+            return
+        }
+        for (u in listOf(W5_CMD_NOTIFY_CHAR, W5_EVENT_NOTIFY_CHAR, W5_DATA_NOTIFY_CHAR, W5_AUX_NOTIFY_CHAR)) {
+            val ch = w5.getCharacteristic(u)
+            if (ch != null) cccdQueue.add(ch) else log("5/MG: notify char ${u.toString().substring(0, 8)} not present")
+        }
+        g.getService(HEART_RATE_SERVICE)?.getCharacteristic(HEART_RATE_CHAR)?.let { cccdQueue.add(it) }
+        g.getService(BATTERY_SERVICE)?.getCharacteristic(BATTERY_CHAR)?.let { cccdQueue.add(it) }
+        log("5/MG: hello acked — subscribing ${cccdQueue.size} characteristics")
+        drainCccdQueue(g)
+        if (cccdQueue.isEmpty() && !cccdInFlight) startDisReads(g)
+    }
+
+    /** Read model / serial / hardware revision so the UI can tell an MG from a 5.0. */
+    private fun startDisReads(g: BluetoothGatt) {
+        if (disReadsStarted) return
+        disReadsStarted = true
+        val dis = g.getService(DIS_SERVICE)
+        if (dis == null) {
+            log("No Device Information Service; variant stays UNKNOWN")
+            finishWhoop5Setup()
+            return
+        }
+        for (u in listOf(DIS_MODEL_NUMBER, DIS_SERIAL_NUMBER, DIS_HARDWARE_REVISION)) {
+            dis.getCharacteristic(u)?.let { readQueue.add(it) }
+        }
+        if (readQueue.isEmpty()) {
+            log("DIS present but without model/serial/hw strings")
+            finishWhoop5Setup()
+            return
+        }
+        drainReadQueue(g)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun drainReadQueue(g: BluetoothGatt) {
+        if (readInFlight) return
+        val ch = readQueue.poll()
+        if (ch == null) {
+            if (family == DeviceFamily.WHOOP5 && disReadsStarted) finishWhoop5Setup()
+            return
+        }
+        readInFlight = true
+        if (!g.readCharacteristic(ch)) {
+            readInFlight = false
+            log("readCharacteristic(${ch.uuid}) rejected by stack")
+            drainReadQueue(g)
+        }
+    }
+
+    private fun onRead(g: BluetoothGatt, uuid: UUID, value: ByteArray?, status: Int) {
+        val text = value?.toString(Charsets.UTF_8)?.trim { it <= ' ' || it == '\u0000' }
+        when (uuid) {
+            DIS_MODEL_NUMBER -> disModel = text
+            DIS_SERIAL_NUMBER -> disSerial = text
+            DIS_HARDWARE_REVISION -> disHardware = text
+        }
+        log("DIS ${uuid.toString().substring(4, 8)} = ${text ?: "<read failed status=$status>"}")
+        readInFlight = false
+        drainReadQueue(g)
+    }
+
+    private var w5SetupDone = false
+
+    /** Resolve the variant, then the first (and only) 5/MG connect command: a battery read. */
+    private fun finishWhoop5Setup() {
+        if (w5SetupDone) return
+        w5SetupDone = true
+        val v = Whoop5Variant.from(serial = disSerial, hardwareRevision = disHardware, modelNumber = disModel)
+        _variant.value = v
+        log("5/MG variant: ${v.label} (model=$disModel serial=$disSerial hw=$disHardware)")
+        // Minimal handshake. The 4.0 hello/clock/backfill sequence is NOT sent: those payload
+        // layouts are unverified on puffin framing and the backfill decoders are 4.0-only.
+        send(CommandNumber.GET_BATTERY_LEVEL, withResponse = true)
+    }
+
+    private fun noteFrame(frame: ByteArray, type: Int) {
+        framesSeen++
+        frameTypeCounts[type] = (frameTypeCounts[type] ?: 0) + 1
+        val n = hexLogged[type] ?: 0
+        if (n < HEX_LOG_PER_TYPE) {
+            hexLogged[type] = n + 1
+            val hex = if (frame.size > 96) frame.copyOfRange(0, 96).toHex() + "…(${frame.size}B)" else frame.toHex()
+            log("frame type=$type len=${frame.size} $hex")
+        }
+        if (framesSeen % 500 == 0) log("frames so far: ${frameTypeCounts.toSortedMap()}")
+    }
+
+    private fun registerBondReceiver() {
+        if (bondReceiverRegistered) return
+        try {
+            context.registerReceiver(bondReceiver, IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED))
+            bondReceiverRegistered = true
+        } catch (t: Throwable) {
+            log("bond receiver not registered: ${t.message}")
+        }
+    }
+
+    private fun unregisterBondReceiver() {
+        if (!bondReceiverRegistered) return
+        bondReceiverRegistered = false
+        try { context.unregisterReceiver(bondReceiver) } catch (_: Throwable) { }
+    }
+
+    private fun bondStateName(s: Int): String = when (s) {
+        BluetoothDevice.BOND_NONE -> "NONE"
+        BluetoothDevice.BOND_BONDING -> "BONDING"
+        BluetoothDevice.BOND_BONDED -> "BONDED"
+        else -> "$s"
     }
 
     // ====================================================================================
@@ -1072,6 +1499,16 @@ class WhoopBleClient(
         // flushStandardHR() calls in didDisconnectPeripheral). Runs on the IO scope.
         ioScope.launch { flushLive(); flushStandardHr() }
 
+        ecgSession?.let { s ->
+            if (!s.isFinished) {
+                s.finish("disconnected")
+                handler.removeCallbacks(ecgTickRunnable)
+                publishEcg(force = true)
+            }
+        }
+        if (framesSeen > 0) log("frames this connection: ${frameTypeCounts.toSortedMap()}")
+        unregisterBondReceiver()
+
         // Reset all per-connection state and clear UI flags.
         _state.value = _state.value.copy(connected = false, bonded = false)
         reset()
@@ -1099,6 +1536,17 @@ class WhoopBleClient(
         cccdQueue.clear()
         writeInFlight = false
         cccdInFlight = false
+        readQueue.clear()
+        readInFlight = false
+        disReadsStarted = false
+        w5SetupDone = false
+        w5PersistenceNoted = false
+        frameTypeCounts.clear()
+        hexLogged.clear()
+        framesSeen = 0
+        ecgStopSent = false
+        _variant.value = Whoop5Variant.UNKNOWN
+        disModel = null; disSerial = null; disHardware = null
 
         // Reset offload state so the next connect starts a fresh session (port of the backfill
         // flag resets in didDisconnectPeripheral). Timers are handler-posted, so cancel them here.
