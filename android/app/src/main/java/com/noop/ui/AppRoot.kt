@@ -95,6 +95,7 @@ internal enum class Destination(
     // Group: Live
     Live("live", "Live", Icons.Filled.FavoriteBorder),
     Intervals("intervals", "Intervals", Icons.Filled.Timeline),
+    Ecg("ecg", "ECG", Icons.Filled.Sensors),
 
     // Group: Recovery
     Sleep("sleep", "Sleep", Icons.Filled.Bedtime),
@@ -134,7 +135,7 @@ private data class DrawerGroup(val header: String, val items: List<Destination>)
 
 private val drawerGroups: List<DrawerGroup> = listOf(
     DrawerGroup("Overview", listOf(Destination.Today, Destination.Intelligence)),
-    DrawerGroup("Live", listOf(Destination.Live, Destination.Intervals)),
+    DrawerGroup("Live", listOf(Destination.Live, Destination.Intervals, Destination.Ecg)),
     DrawerGroup("Recovery", listOf(Destination.Sleep, Destination.Breathe, Destination.Stress)),
     DrawerGroup("Activity", listOf(Destination.Workouts, Destination.Trends)),
     DrawerGroup("Insight", listOf(
@@ -291,6 +292,7 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
                 composable(Destination.Live.route) { LiveScreen(viewModel) }
                 composable(Destination.Sleep.route) { SleepScreen(viewModel) }
                 composable(Destination.Intervals.route) { IntervalsScreen(viewModel) }
+                composable(Destination.Ecg.route) { EcgScreen(viewModel) }
                 composable(Destination.Breathe.route) { BreatheScreen(viewModel) }
                 composable(Destination.Coach.route) { CoachScreen() }
                 composable(Destination.Explore.route) { TrendsExploreScreen(viewModel) }

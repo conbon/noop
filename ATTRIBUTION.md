@@ -17,6 +17,17 @@ Strand builds on prior open-source reverse-engineering and interoperability work
   `fd4b0001-…`, CRC16-Modbus header, CLIENT_HELLO, and the "puffin" packet types)
   that Strand's `DeviceFamily` Whoop-5 path and `whoop5_protocol.json` are ported from.
 
+## NOOP upstream (WHOOP 5.0 / MG protocol research, ECG "Labrador")
+- **NoopApp / `ryanbr/noop`** — this fork descends from the NOOP project (PolyForm
+  Noncommercial 1.0.0, see `LICENSE`). The WHOOP 5.0/MG session work (bond-first,
+  `CLIENT_HELLO`, ack-driven offload, DIS-based MG detection) and the MG ECG
+  ("Labrador") protocol research — command family 123/124/125/139, the 17-byte
+  status header and filtered/raw packet layouts, and the on-hardware findings in
+  their issue #891 — are documented in that project's `docs/PROTOCOL.md` §9. The
+  `Whoop5Variant`, `Whoop5Ecg` and `Whoop5EcgProbe` sources and their tests under
+  `android/app/src/main/java/com/noop/protocol/` are taken from it; the stdlib
+  capture tools under `Tools/whoop-capture/upstream/` likewise.
+
 ## Other
 - **GRDB.swift** (`groue/GRDB.swift`) — SQLite persistence (via Swift Package Manager).
 

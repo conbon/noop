@@ -130,6 +130,36 @@ class ScreenScreenshotTest {
 
     /** Phone-sized frame: Today behind the floating bottom nav, as a user sees it. */
     @Test
+    fun ecg() {
+        captureRoboImage("build/outputs/roborazzi/ecg.png") {
+            NoopTheme {
+                EcgContent(
+                    live = LiveState(connected = true, bonded = true, heartRate = 62, batteryPct = 71.0),
+                    family = com.noop.protocol.DeviceFamily.WHOOP5,
+                    variant = com.noop.protocol.Whoop5Variant.MG,
+                    snapshot = fixtureEcg(),
+                    onStart = {}, onStop = {}, onClear = {}, onExport = {},
+                )
+            }
+        }
+    }
+
+    @Test
+    fun ecgIdle() {
+        captureRoboImage("build/outputs/roborazzi/ecg_idle.png") {
+            NoopTheme {
+                EcgContent(
+                    live = LiveState(connected = true, bonded = true),
+                    family = com.noop.protocol.DeviceFamily.WHOOP5,
+                    variant = com.noop.protocol.Whoop5Variant.UNKNOWN,
+                    snapshot = null,
+                    onStart = {}, onStop = {}, onClear = {}, onExport = {},
+                )
+            }
+        }
+    }
+
+    @Test
     @Config(sdk = [34], qualifiers = RobolectricDeviceQualifiers.Pixel7)
     fun shell() {
         captureRoboImage("build/outputs/roborazzi/shell.png") {
@@ -247,4 +277,50 @@ internal fun fixtureDays(count: Int = 30): List<DailyMetric> {
             respRateBpm = 15.8 + 0.9 * cos(w + 0.9),
         )
     }
+}
+
+/**
+ * A synthetic in-progress ECG recording: 4 s of a PQRST-ish waveform at 128 Hz fed through the real
+ * session/decoder path, so the screen renders exactly what a live run would produce.
+ */
+internal fun fixtureEcg(): com.noop.protocol.EcgSession.Snapshot {
+    val session = com.noop.protocol.EcgSession(startedAtMs = 1_700_000_000_000L)
+    session.commandSent(com.noop.protocol.Whoop5Ecg.TOGGLE_REALTIME_FILTERED_ECG_CMD, 1)
+    session.commandSent(com.noop.protocol.Whoop5Ecg.MAIN_CONTROL_ECG_DATA_GENERATION_CMD, 2)
+    session.commandAnswered(com.noop.protocol.Whoop5Ecg.TOGGLE_REALTIME_FILTERED_ECG_CMD, com.noop.protocol.Whoop5EcgProbe.CommandOutcome.Success)
+    session.commandAnswered(com.noop.protocol.Whoop5Ecg.MAIN_CONTROL_ECG_DATA_GENERATION_CMD, com.noop.protocol.Whoop5EcgProbe.CommandOutcome.Success)
+    val hz = 128
+    val beatEvery = (hz * 60 / 62.0).toInt()
+    fun sample(i: Int): Int {
+        val t = i % beatEvery
+        val qrs = when (t) {
+            in 20..23 -> -180.0
+            in 24..29 -> 1800.0 * (1 - kotlin.math.abs(t - 26.5) / 3.5)
+            in 30..33 -> -320.0
+            else -> 0.0
+        }
+        val tWave = if (t in 55..85) 260.0 * kotlin.math.sin(Math.PI * (t - 55) / 30.0) else 0.0
+        val pWave = if (t in 2..14) 90.0 * kotlin.math.sin(Math.PI * (t - 2) / 12.0) else 0.0
+        val noise = 12.0 * cos(i * 0.7)
+        return (qrs + tWave + pWave + noise).toInt()
+    }
+    var seq = 1
+    var idx = 0
+    val perPacket = 32
+    val packets = 4 * hz / perPacket
+    for (p in 0 until packets) {
+        val samples = List(perPacket) { sample(idx + it) }
+        idx += perPacket
+        val header = listOf(
+            3, 0x05, 1, 1, 0, 1,
+            0, 1, (p * 100 / (30 * hz / perPacket)).coerceAtMost(99), 0, 62, 63,
+            48, 0, 21,
+            perPacket and 0xFF, (perPacket shr 8) and 0xFF,
+        )
+        val payload = (header + samples.flatMap { listOf(it and 0xFF, (it shr 8) and 0xFF) })
+            .map { it.toByte() }.toByteArray()
+        val frame = com.noop.protocol.Framing.puffinCommandFrame(cmd = 0, seq = seq++ and 0xFF, payload = payload, type = 43)
+        session.feed(frame, nowMs = 1_700_000_000_000L + 400L + p * (perPacket * 1000L / hz))
+    }
+    return session.snapshot()
 }

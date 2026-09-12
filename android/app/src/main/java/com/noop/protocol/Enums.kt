@@ -92,7 +92,13 @@ enum class CommandNumber(val rawValue: Int) {
     START_RAW_DATA(81),
     STOP_RAW_DATA(82),
     STOP_HAPTICS(122),
-    SELECT_WRIST(123);
+    SELECT_WRIST(123),
+    // WHOOP MG ECG ("Labrador") family — MG-only, experimental. Payload is [revision=0x01, arg];
+    // see docs/ECG_RESEARCH.md. Numbers come from the 4.0-derived table and are NOT yet attested
+    // to produce ECG packets on an MG.
+    TOGGLE_LABRADOR_DATA_GENERATION(124),
+    TOGGLE_LABRADOR_RAW_SAVE(125),
+    TOGGLE_LABRADOR_FILTERED(139);
 
     companion object {
         private val byRaw = entries.associateBy { it.rawValue }
