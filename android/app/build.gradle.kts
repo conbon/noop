@@ -4,6 +4,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("com.google.devtools.ksp")
+    id("io.github.takahirom.roborazzi")
 }
 
 // Optional release signing. Credentials live in `keystore.properties` (git-ignored, never
@@ -22,8 +23,8 @@ android {
         applicationId = "com.noop.whoop"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -114,6 +115,13 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    testOptions {
+        unitTests {
+            // Robolectric needs the app's resources on the JVM test classpath.
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -157,6 +165,16 @@ dependencies {
     // --- Unit / instrumentation tests ---
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    // Real org.json on the JVM so importer tests can run without Robolectric (android.jar stubs it).
+    testImplementation("org.json:json:20240303")
+
+    // --- JVM screenshot tests (no emulator): Robolectric renders real pixels, Roborazzi saves PNGs ---
+    testImplementation("org.robolectric:robolectric:4.13")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.26.0")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.26.0")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-junit-rule:1.26.0")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.test:core-ktx:1.5.0")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")

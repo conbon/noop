@@ -13,11 +13,16 @@ translated from that verified implementation; they are not invented here.
 
 ## Status — read this first
 
-> **This project has NOT been compiled or run on a device.** It was authored without a
-> JDK or Android SDK available, against a written contract, so the modules fit together
-> by construction rather than by a green build. Treat the first `./gradlew assembleDebug`
-> as the real compile check, and treat the first on-strap session as the real protocol
-> check.
+> **Compiles and ships, but is NOT yet verified on a strap.** CI builds installable APKs
+> on every push to `main` and on pull requests (see `.github/workflows/android-apk.yml`;
+> tag `v*` or run the workflow with a `release_tag` to publish a GitHub Release). JVM
+> screenshot tests (Roborazzi) render the main screens and the importer has parser tests,
+> but the BLE layer still awaits its first on-device session.
+>
+> Closing the loop from a real phone: **Settings → Diagnostics → Export log…** writes a
+> text file with the app's on-device log (pairing, offloads, imports, scoring) plus this
+> process's logcat — share it to debug against real hardware. **Settings → Import WHOOP
+> data** takes the app.whoop.com export zip (or a single CSV from it).
 
 In particular, **the BLE layer must be validated on real hardware** — a phone with
 Bluetooth and an actual WHOOP strap. The bond trick (one confirmed write to the command

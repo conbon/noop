@@ -8,6 +8,7 @@ import com.noop.analytics.IntelligenceEngine
 import com.noop.analytics.UserProfile
 import com.noop.ble.LiveState
 import com.noop.ble.WhoopBleClient
+import com.noop.data.AppLog
 import com.noop.data.DailyMetric
 import com.noop.data.WhoopDatabase
 import com.noop.data.WhoopRepository
@@ -110,6 +111,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         maxHROverride = profileStore.hrMaxOverride
                             .takeIf { it > 0 }?.toDouble(),
                     )
+                }.onSuccess {
+                    AppLog.i("Scoring", "analyzeRecent ok (${recentDays.value.size} days cached)")
+                }.onFailure { e ->
+                    AppLog.e("Scoring", "analyzeRecent failed", e)
                 }
                 delay(ANALYZE_INTERVAL_MS) // 15 min, matches the offload cadence
             }

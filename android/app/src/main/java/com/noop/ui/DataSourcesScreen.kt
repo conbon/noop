@@ -154,8 +154,12 @@ fun DataSourcesScreen(vm: AppViewModel) {
         busy = true
         scope.launch {
             val summary = withContext(Dispatchers.IO) {
-                runCatching { block() }.getOrElse { ImportSummary.failure("Import", it.message ?: "failed") }
+                runCatching { block() }.getOrElse {
+                    com.noop.data.AppLog.e("Import", "importer threw", it)
+                    ImportSummary.failure("Import", it.message ?: "failed")
+                }
             }
+            com.noop.data.AppLog.i("Import", "${summary.source}: ${summary.message} counts=${summary.counts}")
             refreshCounts()
             busy = false
             Toast.makeText(context, summary.message, Toast.LENGTH_LONG).show()

@@ -3,10 +3,15 @@ package com.noop.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -52,6 +57,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -77,7 +83,7 @@ import kotlinx.coroutines.launch
 // belong to later waves point at a ComingSoon placeholder so the app compiles today.
 
 /** A single drawer destination: stable route, display title, sidebar icon. */
-private enum class Destination(
+internal enum class Destination(
     val route: String,
     val title: String,
     val icon: ImageVector,
@@ -172,12 +178,12 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
                         .padding(horizontal = 12.dp, vertical = 16.dp),
                 ) {
                     Overline(
-                        "Strand",
+                        "NOOP",
                         modifier = Modifier.padding(start = 16.dp, bottom = 4.dp),
-                        color = Palette.accent,
+                        color = Palette.textPrimary,
                     )
                     Text(
-                        "Instrument",
+                        "Offline strap console",
                         style = NoopType.footnote,
                         color = Palette.textTertiary,
                         modifier = Modifier.padding(start = 16.dp, bottom = 12.dp),
@@ -254,10 +260,19 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Palette.surfaceBase,
+                        containerColor = Palette.surfaceBaseTop,
                         titleContentColor = Palette.textPrimary,
                         navigationIconContentColor = Palette.textPrimary,
                     ),
+                )
+            },
+            bottomBar = {
+                NoopBottomBar(
+                    current = current,
+                    onNavigate = { dest ->
+                        if (dest.route != currentRoute) nav.navigateTopLevel(dest.route)
+                    },
+                    onMore = { scope.launch { drawerState.open() } },
                 )
             },
         ) { inner ->
@@ -296,6 +311,82 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
                 composable(Destination.Settings.route) { SettingsScreen(viewModel) }
             }
         }
+    }
+}
+
+// MARK: - Bottom navigation — floating rounded bar
+//
+// The four everyday destinations plus "More" (opens the full drawer). Selected
+// item reads in primary white; the rest in secondary grey. Everything else in
+// the app stays reachable through the drawer.
+
+internal val bottomBarItems = listOf(
+    Destination.Today,
+    Destination.Sleep,
+    Destination.Trends,
+    Destination.Health,
+)
+
+@Composable
+internal fun NoopBottomBar(
+    current: Destination,
+    onNavigate: (Destination) -> Unit,
+    onMore: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Palette.surfaceBase)
+            .padding(start = 14.dp, end = 14.dp, bottom = 12.dp, top = 6.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(26.dp))
+                .background(Palette.surfaceOverlay)
+                .padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            bottomBarItems.forEach { dest ->
+                BottomBarItem(
+                    icon = dest.icon,
+                    label = dest.title,
+                    selected = current == dest,
+                    onClick = { onNavigate(dest) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            BottomBarItem(
+                icon = Icons.Filled.Menu,
+                label = "More",
+                selected = false,
+                onClick = onMore,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun BottomBarItem(
+    icon: ImageVector,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tint = if (selected) Palette.textPrimary else Palette.textSecondary
+    Column(
+        modifier = modifier.clickable(
+            indication = null,
+            interactionSource = remember { MutableInteractionSource() },
+            onClick = onClick,
+        ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(22.dp))
+        Text(label, style = NoopType.footnote, color = tint)
     }
 }
 

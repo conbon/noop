@@ -6,4 +6,6 @@ plugins {
     id("org.jetbrains.kotlin.android") version "1.9.24" apply false
     // KSP version is <kotlinVersion>-<kspVersion>; must track the Kotlin version exactly.
     id("com.google.devtools.ksp") version "1.9.24-1.0.20" apply false
+    // JVM screenshot tests (Robolectric-rendered Compose → PNG). No emulator needed.
+    id("io.github.takahirom.roborazzi") version "1.26.0" apply false
 }

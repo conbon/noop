@@ -535,9 +535,9 @@ private enum class StressBand(val title: String, val tone: StrandTone) {
 // stress warms toward amber. Never the red→green recovery traffic light.
 
 private object StressRamp {
-    val CALM = Color(0xFF4FA9C9)   // cool blue — low
-    val STEADY = Color(0xFF5BD3A0) // mint — balanced
-    val TENSE = Color(0xFFE8C24B)  // amber — high
+    val CALM = Color(0xFF67ADE8)   // cool blue — low (zone1)
+    val STEADY = Color(0xFF00F2A0) // teal-green — balanced (statusPositive)
+    val TENSE = Color(0xFFFFA721)  // orange — high (statusWarning)
 
     private val stops: List<Pair<Float, Color>> = listOf(
         0.00f to CALM,

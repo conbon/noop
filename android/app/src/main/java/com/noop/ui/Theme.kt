@@ -19,42 +19,59 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// MARK: - Palette (ported verbatim from StrandDesign/Palette.swift §9.1)
+// MARK: - Palette — "Night Console" v2
 //
-// Dark-only, instrument-grade. Hex values are exact per the spec — do not substitute.
-// Mirrors the macOS StrandPalette enum so the Android port shares one visual language.
+// Dark-only, performance-dashboard grade. Neutral blue-charcoal surfaces, white
+// primary text, and one saturated signal color per metric family:
+//   sleep = slate blue · recovery = traffic-light tiers · strain = electric blue.
+// Chrome (selection, links, focus) uses a restrained cyan so metric colors stay
+// reserved for data.
 
 object Palette {
 
-    // Surfaces (§9.1)
-    val surfaceBase = Color(0xFF060A08)    // near-black, faint green
-    val surfaceRaised = Color(0xFF0D1512)  // dark green-black cards
-    val surfaceOverlay = Color(0xFF121D18) // raised / popovers / sheets
-    val surfaceInset = Color(0xFF0A100D)   // wells / chart insets
-    val hairline = Color(0xFF1B2620)       // soft green-grey 1px border
-    val hairlineStrong = Color(0xFF27362E) // hover / emphasis border
+    // Surfaces — measured from the reference: a cool graphite that lifts slightly toward
+    // the top of the screen. Cards sit one step lighter than the base.
+    val surfaceBase = Color(0xFF151A1E)    // app background
+    val surfaceBaseTop = Color(0xFF1F262C) // the lighter head of the background gradient
+    val surfaceRaised = Color(0xFF23282D)  // cards
+    val surfaceOverlay = Color(0xFF2C3136) // sheets / popovers / nav bar
+    val surfaceInset = Color(0xFF1A1F23)   // wells / chart insets
+    val hairline = Color(0xFF2B3136)       // subtle 1px separators
+    val hairlineStrong = Color(0xFF3B4248) // emphasis separators
 
-    // Text (§9.1)
-    val textPrimary = Color(0xFFF4F7F5)
-    val textSecondary = Color(0xFF8B9690)
-    val textTertiary = Color(0xFF6F7A74)
+    // Text — pure white numerals, a light grey for supporting values.
+    val textPrimary = Color(0xFFFFFFFF)
+    val textSecondary = Color(0xFFB9BDC2)
+    val textTertiary = Color(0xFF858688)
 
-    // Glow (§9.1)
-    val glowAmbient = Color(0xFF1B2A3A)
+    // Ambient glow behind hero readouts.
+    val glowAmbient = Color(0xFF1C2230)
 
-    // Accent — chrome, not data (§9.1)
-    val accent = Color(0xFF18C98B)       // health green
-    val accentHover = Color(0xFF2FE0A0)
-    val accentMuted = Color(0xFF10271F)  // dark-green tint (selected rows)
-    val focusRing = Color(0xFF18C98B)
+    // Accent — chrome, not data. The same blue the strain family owns.
+    val accent = Color(0xFF0093E9)
+    val accentHover = Color(0xFF3FAFF2)
+    val accentMuted = Color(0xFF16303F)  // selected-row tint
+    val focusRing = Color(0xFF0093E9)
     const val disabledOpacity = 0.45f
 
-    // Recovery gradient — traffic light (low red → high green).
-    val recovery000 = Color(0xFFFF4F73) // depleted — pink-red
-    val recovery030 = Color(0xFFF5A623) // low — amber
-    val recovery055 = Color(0xFFE8C24B) // moderate — gold
-    val recovery078 = Color(0xFF18C98B) // primed — health green
-    val recovery100 = Color(0xFF2FE6A8) // peak — bright green
+    // Ring track — the unfilled remainder of every gauge (opaque, reads on base and cards).
+    val ringTrack = Color(0xFF2F373A)
+
+    // Metric identities.
+    val sleepBlue = Color(0xFF7AA2BB)   // slate blue — everything sleep
+    val strainBlue = Color(0xFF0093E9)  // electric blue — everything strain
+
+    // Recovery — traffic-light tiers (discrete, like the score chip).
+    val recoveryLow = Color(0xFFF5052A)   // 0–33
+    val recoveryMedium = Color(0xFFFFDE00) // 34–66
+    val recoveryHigh = Color(0xFF1EEA0D)  // 67–100
+
+    // Recovery gradient stops (for chart fills; the score itself uses tiers).
+    val recovery000 = Color(0xFFF5052A)
+    val recovery030 = Color(0xFFFF8A1A)
+    val recovery055 = Color(0xFFFFDE00)
+    val recovery078 = Color(0xFF8EE800)
+    val recovery100 = Color(0xFF1EEA0D)
 
     /** Ordered gradient stops (position 0..1 → color) for the recovery scale. */
     val recoveryStops: List<Pair<Float, Color>> = listOf(
@@ -65,11 +82,11 @@ object Palette {
         1.00f to recovery100,
     )
 
-    // Strain ramp — ember → magenta (§9.1)
-    val strain000 = Color(0xFFE8B04B) // ember / warm gold
-    val strain033 = Color(0xFFE8743B) // orange
-    val strain066 = Color(0xFFE0476B) // rose-red
-    val strain100 = Color(0xFFC13AC1) // magenta
+    // Strain ramp — deep to bright electric blue.
+    val strain000 = Color(0xFF1D6FB5)
+    val strain033 = Color(0xFF0093E9)
+    val strain066 = Color(0xFF0093E9)
+    val strain100 = Color(0xFF4FB6F5)
 
     val strainStops: List<Pair<Float, Color>> = listOf(
         0.00f to strain000,
@@ -78,36 +95,36 @@ object Palette {
         1.00f to strain100,
     )
 
-    // Sleep stages (§9.1)
-    val sleepAwake = Color(0xFFE0476B) // rose
-    val sleepLight = Color(0xFF5C6FB1) // periwinkle
-    val sleepDeep = Color(0xFF2C3A7A)  // deep indigo
-    val sleepREM = Color(0xFF5BE0C7)   // mint
+    // Sleep stages.
+    val sleepAwake = Color(0xFFC9C9CB) // pale grey
+    val sleepLight = Color(0xFFA4A3F3) // periwinkle
+    val sleepDeep = Color(0xFFFB97FA)  // pink (SWS)
+    val sleepREM = Color(0xFFAC5AED)   // violet
 
-    // HR zones (§9.1)
-    val zone1 = Color(0xFF4FA9C9)
-    val zone2 = Color(0xFF5BD3A0)
-    val zone3 = Color(0xFFE8C24B)
-    val zone4 = Color(0xFFE8743B)
-    val zone5 = Color(0xFFE0476B)
+    // HR zones 1..5 — cool → hot (the stress low/medium/high family, then warning/critical).
+    val zone1 = Color(0xFF67ADE8)
+    val zone2 = Color(0xFF00F2A0)
+    val zone3 = Color(0xFFFFDE00)
+    val zone4 = Color(0xFFFFA721)
+    val zone5 = Color(0xFFF5052A)
 
     /** HR zones indexed 1..5; index 0 mirrors zone1 for convenience. */
     val hrZones: List<Color> = listOf(zone1, zone1, zone2, zone3, zone4, zone5)
 
-    // Status (§9.1) — never reused as recovery colors.
-    val statusPositive = Color(0xFF18C98B)
-    val statusWarning = Color(0xFFF5A623)
-    val statusCritical = Color(0xFFFF4F73)
+    // Status — teal-green "within range", orange caution, red critical.
+    val statusPositive = Color(0xFF00F2A0)
+    val statusWarning = Color(0xFFFFA721)
+    val statusCritical = Color(0xFFF5052A)
 
-    // Per-metric accents — Apple-Health bars / HRV / energy / risk.
-    val metricCyan = Color(0xFF2FC7FF)   // Apple Health bars
-    val metricPurple = Color(0xFFA879FF) // HRV / strain-style data
-    val metricAmber = Color(0xFFF5A623)  // calories / moderate
-    val metricRose = Color(0xFFFF4F73)   // risk / high strain / low recovery
+    // Per-metric accents for secondary dashboards.
+    val metricCyan = Color(0xFF67ADE8)
+    val metricPurple = Color(0xFFAC5AED)
+    val metricAmber = Color(0xFFFFA721)
+    val metricRose = Color(0xFFF5556A)
 
-    // MARK: - Sampling helpers (mirror StrandPalette.sample / recoveryColor)
+    // MARK: - Sampling helpers
 
-    /** Linear-interpolate two colors in sRGB space (matches StrandPalette.interpolate). */
+    /** Linear-interpolate two colors in sRGB space. */
     private fun lerp(a: Color, b: Color, t: Float): Color {
         val tt = t.coerceIn(0f, 1f)
         return Color(
@@ -137,109 +154,124 @@ object Palette {
         return lerp(lower.second, upper.second, localT)
     }
 
-    /** Sample the recovery gradient at a recovery score 0..100. */
-    fun recoveryColor(score: Double): Color = sample(recoveryStops, (score / 100.0).toFloat())
+    /**
+     * Recovery color for a 0..100 score — DISCRETE traffic-light tiers, so the
+     * ring, chip and chart markers always land on exactly one of three colors.
+     */
+    fun recoveryColor(score: Double): Color = when {
+        score < 34 -> recoveryLow
+        score < 67 -> recoveryMedium
+        else -> recoveryHigh
+    }
 
-    /** Sample the strain gradient at a strain value on the 0..21 Whoop scale. */
-    fun strainColor(strain: Double): Color = sample(strainStops, (strain / 21.0).toFloat())
+    /** Strain color: the electric-blue identity (uniform, not score-graded). */
+    fun strainColor(strain: Double): Color = strainBlue
 
-    /** The state word for a recovery score, per spec §9.3. */
+    /** The state word for a recovery score. */
     fun recoveryState(score: Double): String = when {
-        score < 25 -> "DEPLETED"
-        score < 50 -> "LOW"
-        score < 70 -> "MODERATE"
-        score < 88 -> "PRIMED"
-        else -> "PEAK"
+        score < 34 -> "LOW"
+        score < 67 -> "MODERATE"
+        else -> "HIGH"
     }
 
     /** HR-zone color for a 1..5 zone index (clamped). */
     fun hrZoneColor(zone: Int): Color = hrZones[zone.coerceIn(1, 5)]
 
-    /** The signature recovery gradient as a horizontal sweep brush (for bars). */
+    /** The recovery gradient as a horizontal sweep brush (for chart fills). */
     fun recoveryBrush(): Brush =
         Brush.horizontalGradient(*recoveryStops.toTypedArray())
 
     /** The strain ramp as a horizontal sweep brush. */
     fun strainBrush(): Brush =
         Brush.horizontalGradient(*strainStops.toTypedArray())
+
+    /** Screen background: a gentle lift at the top settling into the base by ~600px. */
+    fun screenBackground(): Brush =
+        Brush.verticalGradient(0f to surfaceBaseTop, 1f to surfaceBase, endY = 1400f)
 }
 
-// MARK: - Motion (ported from StrandDesign/Motion.swift §9.6)
-//
-// Physiological motion — breathe / pulse / flow, no cartoon bounce.
+// MARK: - Motion — physiological: breathe / pulse / flow, no cartoon bounce.
 
 object Motion {
+    /**
+     * Master switch for motion. Screenshot tests turn it off: an infinite "breathing"
+     * transition never lets the Compose runtime go idle, so every capture after it
+     * would wait out the idle timeout, and draw-in animations would capture mid-flight.
+     */
+    @Volatile var animationsEnabled: Boolean = true
+
     // Durations (ms)
     const val durationFast = 180       // hover/press feedback
     const val durationStandard = 300   // card appear, fades
     const val durationSlow = 900       // ring arc, waveform ignite
     const val breathPeriodMs = 3200    // one breath cycle for ambient pulsing
 
-    // Easings (Compose equivalents of the SwiftUI curves)
+    // Easings
     val easeOut: Easing = LinearOutSlowInEasing
     val easeInOut: Easing = FastOutSlowInEasing
     val drawIn: Easing = LinearOutSlowInEasing
     val interactive: Easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
 }
 
-// MARK: - Metrics (ported from StrandDesign/Components.swift NoopMetrics)
+// MARK: - Metrics — one spacing scale for every screen.
 
 object Metrics {
-    val cardRadius = 16.dp
+    val cardRadius = 18.dp
     val cardPadding = 16.dp
     val gap = 12.dp           // gap between cards
     val sectionGap = 28.dp    // gap between sections
-    val screenPadding = 24.dp
+    val screenPadding = 20.dp
     val tileHeight = 104.dp   // every metric tile is this tall
     val chartHeight = 220.dp
 }
 
-// MARK: - Typography (ported from StrandDesign/Typography.swift §9.2)
+// MARK: - Typography — heavy numerals, tracked uppercase labels.
 //
-// SF Pro on macOS; on Android we use the platform default (Roboto/system) with
-// the same sizes/weights. Numeric/live styles request tabular-ish alignment via
-// medium/semibold weights; Compose has no monospacedDigit toggle, so live values
-// use Monospace where exact non-reflow alignment is load-bearing.
+// Numbers are the interface: system sans at ExtraBold with slight negative
+// tracking for the big readouts. Labels are small, bold, ALL-CAPS with wide
+// tracking. Monospace survives only for raw/log views.
 
 object NoopType {
     private val sans = FontFamily.Default
     private val monoFamily = FontFamily.Monospace
 
-    /** Display 64–80 / Semibold — the recovery ring number. */
+    /** Display — the hero score numerals. */
     fun display(size: Float = 72f) = TextStyle(
-        fontFamily = sans, fontWeight = FontWeight.SemiBold, fontSize = size.sp,
+        fontFamily = sans, fontWeight = FontWeight.ExtraBold, fontSize = size.sp,
+        letterSpacing = (-0.5).sp,
     )
 
-    val title1 = TextStyle(fontFamily = sans, fontWeight = FontWeight.Bold, fontSize = 28.sp)
-    val title2 = TextStyle(fontFamily = sans, fontWeight = FontWeight.SemiBold, fontSize = 22.sp)
+    val title1 = TextStyle(fontFamily = sans, fontWeight = FontWeight.ExtraBold, fontSize = 26.sp)
+    val title2 = TextStyle(fontFamily = sans, fontWeight = FontWeight.Bold, fontSize = 21.sp)
     val headline = TextStyle(fontFamily = sans, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
     val body = TextStyle(fontFamily = sans, fontWeight = FontWeight.Normal, fontSize = 15.sp)
     val subhead = TextStyle(fontFamily = sans, fontWeight = FontWeight.Normal, fontSize = 13.sp)
     val caption = TextStyle(fontFamily = sans, fontWeight = FontWeight.Normal, fontSize = 12.sp)
     val footnote = TextStyle(fontFamily = sans, fontWeight = FontWeight.Normal, fontSize = 11.sp)
 
-    /** Overline 11 / Semibold, +0.8 tracking, ALL-CAPS at use site. */
+    /** Overline 11 / Bold, +1.3 tracking, ALL-CAPS at use site. */
     val overline = TextStyle(
-        fontFamily = sans, fontWeight = FontWeight.SemiBold, fontSize = 11.sp,
-        letterSpacing = 0.8.sp,
+        fontFamily = sans, fontWeight = FontWeight.Bold, fontSize = 11.sp,
+        letterSpacing = 1.3.sp,
     )
 
-    /** Mono 13 — raw / log views. */
+    /** Mono 13 — raw / log views only. */
     val mono = TextStyle(fontFamily = monoFamily, fontWeight = FontWeight.Normal, fontSize = 13.sp)
 
-    /** A numeric style at an arbitrary size (Monospace so live values don't reflow). */
-    fun number(size: Float, weight: FontWeight = FontWeight.SemiBold) = TextStyle(
-        fontFamily = monoFamily, fontWeight = weight, fontSize = size.sp,
+    /** A numeric readout at an arbitrary size — heavy sans, slightly tightened. */
+    fun number(size: Float, weight: FontWeight = FontWeight.ExtraBold) = TextStyle(
+        fontFamily = sans, fontWeight = weight, fontSize = size.sp,
+        letterSpacing = (-0.3).sp,
     )
 
     fun mono(size: Float, weight: FontWeight = FontWeight.Normal) = TextStyle(
         fontFamily = monoFamily, fontWeight = weight, fontSize = size.sp,
     )
 
-    val bodyNumber = TextStyle(fontFamily = monoFamily, fontWeight = FontWeight.Normal, fontSize = 15.sp)
-    val captionNumber = TextStyle(fontFamily = monoFamily, fontWeight = FontWeight.Medium, fontSize = 12.sp)
+    val bodyNumber = TextStyle(fontFamily = sans, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+    val captionNumber = TextStyle(fontFamily = sans, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
 
-    const val overlineTracking = 0.8f
+    const val overlineTracking = 1.3f
 }
 
 // MARK: - Material3 bridge
@@ -280,12 +312,12 @@ private val NoopShapes = Shapes(
     extraSmall = RoundedCornerShape(8.dp),
     small = RoundedCornerShape(12.dp),
     medium = RoundedCornerShape(Metrics.cardRadius),
-    large = RoundedCornerShape(20.dp),
+    large = RoundedCornerShape(22.dp),
     extraLarge = RoundedCornerShape(28.dp),
 )
 
 /**
- * NoopTheme — dark, instrument-grade. Always dark regardless of system setting
+ * NoopTheme — dark, dashboard-grade. Always dark regardless of system setting
  * (the design system is dark-only), but `isSystemInDarkTheme` is read so the
  * status-bar contract is satisfied on devices that key off it.
  */
